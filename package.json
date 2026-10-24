@@ -1,0 +1,23 @@
+{
+  "name": "one-bad-tuesday",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HackTX 2026 project monorepo",
+  "scripts": {
+    "dev": "concurrently --kill-others --names backend,frontend --prefix-colors blue,magenta \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "uv run --directory backend uvicorn app.main:app --reload --port 8000",
+    "dev:frontend": "npm --prefix frontend run dev",
+    "seed:customer": "uv run --directory backend python -m app.seed",
+    "seed:customer:reset": "uv run --directory backend python -m app.seed --recreate-account",
+    "test": "npm run test:backend && npm --prefix frontend test && npm run check:frontend",
+    "test:backend": "uv run --directory backend pytest",
+    "lint:backend": "uv run --directory backend ruff check .",
+    "check:frontend": "npm --prefix frontend run typecheck && npm --prefix frontend run lint && npm --prefix frontend run build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}
