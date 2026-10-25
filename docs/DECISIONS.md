@@ -139,3 +139,118 @@ to the configured customer date and `America/Chicago`. The response carries both
 source date and retrieval timestamp. Explicit scenario dates must match the loaded
 snapshot, preventing a caller from silently combining bills and pay periods from a
 different calendar.
+
+## M3 — Agentic research
+
+### Keep research read-only and tied to one M2 result
+
+The research endpoint gets one snapshot, runs `simulate(..., actions=[])` once, and
+returns both with a fingerprint. The fingerprint covers the scenario request, source
+identity/balance/date, bills, wage losses, and fictional location context, while omitting
+the volatile retrieval timestamp so identical fresh reads can reuse research for 15
+minutes. No candidate changes a Nessie transaction or a projected balance.
+
+### Use official Gemini SDK with backend-owned tool execution
+
+`google-genai` is the only Gemini client. The configured default is
+`gemini-3.5-flash-lite`, verified with this project's key; the formerly common
+`gemini-2.5-flash` appeared in model listing but returned 404 on generation for this key.
+Gemini selects one of three declared functions, while Python validates and executes
+SerpApi requests, enforces up to six calls (eight on explicit refresh), and limits model
+turns and elapsed time. Extracted JSON is checked against strict Pydantic contracts and
+the actual evidence IDs. Search snippets are untrusted; provider failures remain visible.
+
+### Treat listings as evidence of listings, not personal approvals
+
+SerpApi uses its Google web, Maps places, and Maps directions engines. Every public
+source URL is sanitized, linked, and time-stamped. A listing can support the existence
+of a service or publicly stated terms; it does not verify this customer's eligibility,
+employer permission, appointment, extension, or final price. Unknown required terms make
+a candidate conditional. Only source-observed USD fares can be tagged observed; missing
+fares remain unknown. Transit is verified only with fictional origin and destination,
+both shift times, and dated outward and return route evidence for each affected shift.
+No route inputs are invented for the default demo.
+
+### Keep M4 action hints separate from execution
+
+Candidate actions carry stable graph IDs, mechanism, requirements, cost/timing certainty,
+evidence IDs, and potential-effect hints. Questions link to unknown candidate
+requirements and are capped at two. These structures let M4 bind confirmed answers and
+define dated action effects, but M3 never passes nonempty actions to the simulator or
+calculates a recovered cash-flow path.
+
+## M3.2 — Geographic grounding and research coverage
+
+### Allocate the provider budget by pathway
+
+The original M3 loop gave all targets to one Gemini conversation and stopped whenever
+the model returned no next tool call. Gemini selected one rental-assistance query and
+then ended, so the unused SerpApi budget never reached commute or repair research. M3.2
+turns ranked targets into four explicit pathways: transportation, employer flexibility,
+repair affordability, and bill assistance. Gemini still chooses the allowed tool and
+query within each researchable pathway. Python reserves the six-call initial budget as
+up to four dated transit legs, one mechanic search, and one bill-assistance search. A
+failed or empty pathway does not stop the remaining pathways.
+
+### Ground the fictional demo in editable Austin locations
+
+The default research context uses `3810 N Lamar Blvd` as a geographic home proxy and
+`525 N Lamar Blvd` as the fictional workplace, with an 08:00–16:00 weekday shift and
+fictional Whole Foods employment. These values are explicit UI defaults, stay editable,
+and are fingerprinted with research. They are never inferred from IP or Nessie data.
+
+### Let the model choose transit, then canonicalize dated legs
+
+When Gemini selects `find_transit` for a high-priority commute pathway, the backend
+expands that intent into trusted scenario dates: an arrive-by request ten minutes before
+shift start and a return request five minutes after shift end for each of the two
+affected shifts, within the pathway budget. This prevents model-generated dates or
+addresses from drifting from the scenario. Route feasibility still requires timely
+outbound and return evidence for every affected date. Late, one-way, or incomplete
+routes remain false or unknown and cannot claim protected shifts.
+
+### Treat mechanic ratings and prices separately
+
+Maps ratings and listings establish that a shop is listed; they do not establish a
+low price. Repair candidates without explicit price/value evidence are rewritten as a
+request for a written estimate, with unknown cost and conditional status. Review snippets
+are retained when SerpApi supplies them, but the UI labels ratings as non-price evidence.
+
+## M3.3 — Adaptive research and review-based mechanic evidence
+
+### Make hypotheses model-proposed, scored, and extensible
+
+The four M3.2 pathways were a coverage checklist rather than an adaptive investigation.
+M3.3 asks Gemini for scored hypotheses before tool use, validates the
+`Impact × Urgency × Actionability` product, and permits arbitrary stable hypothesis IDs.
+A small baseline guarantees remote-work, transit, repair, and bill-risk consideration;
+semantic deduplication prevents model restatements of those baselines from wasting calls.
+Question-driven hypotheses use no public search, while evidence-driven hypotheses compete
+for the bounded provider budget. All hypotheses and their outcomes remain visible.
+
+### Guarantee remote-work consideration without assuming permission
+
+Maya's fictional employer is Cedarstone Services and her fictional role is Hourly
+Customer Support Specialist, normally onsite. Remote eligibility, equipment, shift
+flexibility, and make-up hours are explicit unknowns. The backend guarantees a remote-work
+hypothesis and high-priority question, but assigns no protected shifts and makes no claim
+about employer approval or technical access.
+
+### Use Maps Reviews only to prioritize estimate requests
+
+A repair-place search may spend two follow-up calls on `google_maps_reviews` using the
+listing's real `data_id`. Positive and negative price language and transparency language
+are retained separately. The 0–1 contact heuristic weights price evidence 45%,
+transparency 25%, listing reputation 20%, and convenience 10%; convenience remains a
+neutral 0.5 when route evidence is unavailable. Missing review language contributes zero,
+and every candidate still requires a written estimate for the unknown repair. DIY and
+parts-only facilities are excluded from the repair-provider shortlist.
+
+### Treat one late arrive-by result as conditional evidence
+
+SerpApi's documented directions syntax is `time=arrive_by:<timestamp>`, which the client
+already used with an America/Chicago-aware Unix timestamp. A provider result arriving
+after 08:00 proves only that the returned itinerary misses the checked shift. It now yields
+"potentially feasible with adjustment" rather than universal infeasibility; an earlier
+departure, alternative itinerary, return leg, or manager-approved schedule change still
+requires evidence.

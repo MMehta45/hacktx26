@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models import CustomerSnapshot
+from app.research_models import ResearchRequest, ResearchResponse
+from app.research_service import run_research
 from app.simulation import simulate
 from app.simulation_models import CrisisSimulationRequest, CrisisSimulationResponse
 from app.snapshot import SnapshotUnavailable, get_snapshot
@@ -64,6 +66,16 @@ def crisis_simulation(request: CrisisSimulationRequest) -> CrisisSimulationRespo
             snapshot=snapshot,
             simulation=simulate(snapshot, request, actions=[]),
         )
+    except SnapshotUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/research/interventions", response_model=ResearchResponse)
+def research_interventions(request: ResearchRequest) -> ResearchResponse:
+    try:
+        return run_research(request, settings)
     except SnapshotUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     except ValueError as error:

@@ -3,8 +3,9 @@
 One Bad Tuesday is a HackTX 2026 financial-resilience prototype. It provides an
 interactive four-stage shell, a normalized synthetic customer snapshot, a Capital One
 Nessie seed/read path, spending analysis, upcoming obligations and income, and a
-deterministic 30-day crisis simulator with an inspectable consequence graph. Live
-research, questions, and recovery plans remain clearly disabled previews.
+deterministic 30-day crisis simulator with an inspectable consequence graph. The Explore
+stage performs bounded Gemini and SerpApi research and shows source-linked potential
+interventions and pending questions. Recovery plans remain a disabled preview.
 
 ## Prerequisites
 
@@ -93,6 +94,7 @@ npm run dev
 - Backend health: <http://127.0.0.1:8000/health>
 - Snapshot API: <http://127.0.0.1:8000/api/customer/snapshot>
 - Crisis simulator: `POST http://127.0.0.1:8000/api/simulations/crisis`
+- Research: `POST http://127.0.0.1:8000/api/research/interventions`
 - FastAPI docs: <http://127.0.0.1:8000/docs>
 
 The browser calls same-origin Next.js routes, which forward to FastAPI. Backend secrets
@@ -112,6 +114,40 @@ never enter browser code.
 6. Change the repair quote or missed shifts and choose **Rerun simulation**. A quote alone
    never changes the live balance or historical ledger.
 
+## Demo Explore research (Build 03)
+
+1. Add `GEMINI_API_KEY` from [Google AI Studio](https://aistudio.google.com/apikey) and
+   `SERPAPI_API_KEY` from your [SerpApi dashboard](https://serpapi.com/manage-api-key)
+   directly to ignored `backend/.env`. Keep `GEMINI_MODEL=gemini-3.5-flash-lite` unless
+   your key supports a different current model. Restart FastAPI after editing `.env`.
+2. Simulate the crisis and open **Explore**. Choose **Start research**. This sends one
+   read-only Nessie snapshot and untreated simulation through Gemini tool selection;
+   SerpApi search results become linked evidence. The activity list appears after the
+   backend confirms each step. Re-entering Explore keeps the result; **Check this
+   scenario** reuses backend cache while **Refresh sources** spends a new bounded pass.
+3. The Explore fields start with an editable fictional Austin route: `3810 N Lamar Blvd`
+   to `525 N Lamar Blvd`, 08:00–16:00. The first address is a geographic proxy and the
+   Cedarstone Services employer and office are fictional. Maya's fictional role is an
+   hourly Customer Support Specialist who normally works onsite; remote eligibility,
+   equipment, schedule flexibility, and make-up hours are unknown. The app never derives
+   route values from IP.
+4. Gemini proposes and scores multiple hypotheses, then allocates the bounded search
+   budget. Transit uses documented arrival-by semantics and requires outbound and return
+   evidence. A single late itinerary is conditional evidence, not proof that all transit
+   is unavailable.
+5. Repair research can follow Maps listings with real Google Maps Reviews calls. The
+   shortlist shows positive and negative price language, confidence, and source links.
+   Reviews prioritize shops to contact; they never establish the cheapest shop or replace
+   a written estimate. Questions are pending inputs for Build 04, and no action is applied
+   to the cash-flow simulator in Build 03.
+
+The default pass permits at most six SerpApi HTTP requests, including retries; explicit
+refresh permits eight. Results are cached in backend memory for 15 minutes per relevant
+snapshot/scenario/location. Restarting FastAPI clears this cache. Search quota or model
+errors yield partial or failed results rather than fabricated options. The model and
+request/time limits can be changed with `GEMINI_MODEL` and the `RESEARCH_*` backend
+variables in `.env.example`.
+
 The default simulator uses the financial snapshot date in `America/Chicago`, five
 eight-hour weekday shifts, weekly paychecks, and an explicitly labeled 80% take-home
 estimate. Pay loss is applied to the paycheck covering each missed shift. Paychecks are
@@ -130,16 +166,16 @@ npm run dev:frontend
 If ports 3000/8000 are occupied, use alternatives. On macOS/Linux:
 
 ```bash
-npm run dev:backend -- --port 8010
-BACKEND_URL=http://127.0.0.1:8010 npm --prefix frontend run dev -- --port 3010
+uv run --directory backend uvicorn app.main:app --reload --port 8001
+BACKEND_URL=http://127.0.0.1:8001 npm --prefix frontend run dev -- --port 3001
 ```
 
 On Windows PowerShell:
 
 ```powershell
-npm run dev:backend -- --port 8010
-$env:BACKEND_URL = "http://127.0.0.1:8010"
-npm --prefix frontend run dev -- --port 3010
+uv run --directory backend uvicorn app.main:app --reload --port 8001
+$env:BACKEND_URL = "http://127.0.0.1:8001"
+npm --prefix frontend run dev -- --port 3001
 ```
 
 ## Data modes and environment variables
@@ -150,8 +186,10 @@ All credentials belong in `backend/.env`. Never put them in `frontend/.env.local
 | Variable | Purpose |
 | --- | --- |
 | `NESSIE_API_KEY` | Optional Nessie sandbox key used only by FastAPI and the seeder |
-| `SERPAPI_API_KEY` | Reserved for a later build sheet; not invoked in M1 |
-| `GEMINI_API_KEY` | Reserved for a later build sheet; not invoked in M1 |
+| `SERPAPI_API_KEY` | Backend-only web, places, and transit search key for Explore |
+| `GEMINI_API_KEY` | Backend-only Gemini tool selection and candidate extraction key |
+| `GEMINI_MODEL` | Configured Gemini model, default `gemini-3.5-flash-lite` |
+| `RESEARCH_*` | Backend search, iteration, deadline, and cache limits; see `.env.example` |
 | `NESSIE_BASE_URL` | Nessie API origin; defaults to `https://prod-api.nessieisreal.com` |
 | `DEMO_DATA_MODE` | `auto`, `fixture`, or strict `nessie` mode |
 | `DEMO_ANCHOR_DATE` | Frozen ISO date used for repeatable 90-day history and schedules |
@@ -176,7 +214,7 @@ npm test
 ```
 
 This runs backend contract, normalization, simulator arithmetic, due-date allocation,
-graph, and idempotency tests; frontend wage and crisis-render tests; TypeScript; ESLint;
+graph, idempotency, and offline research tests; frontend wage, crisis, and Explore-render tests; TypeScript; ESLint;
 and a production Next.js build. Backend lint is separate:
 
 ```bash
@@ -201,4 +239,6 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M2.md](docs/progress/M2.md) for actual milestone verification.
+[docs/progress/M3.md](docs/progress/M3.md) for actual milestone verification. Real
+provider calls are opt-in through Explore; ordinary automated tests use fake adapters
+and do not spend API quota.

@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { CrisisStage } from "@/components/crisis-stage";
+import { ResearchStage } from "@/components/research-stage";
 import {
   DEFAULT_HOURLY_WAGE,
   DEFAULT_REPAIR_QUOTE,
@@ -10,8 +11,10 @@ import {
   wageInputToCents,
   wagePreview,
 } from "@/lib/scenario";
+import { AUSTIN_DEMO_CONTEXT, researchRequestBody } from "@/lib/research";
 import type { CustomerSnapshot } from "@/types/customer";
 import type { CrisisSimulation, CrisisSimulationResponse } from "@/types/simulation";
+import type { ResearchResponse, ResearchResult } from "@/types/research";
 
 type Stage = 1 | 2 | 3 | 4;
 type RequestState = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string };
@@ -19,7 +22,7 @@ type RequestState = { kind: "idle" } | { kind: "loading" } | { kind: "error"; me
 const stages: Array<{ id: Stage; short: string; label: string }> = [
   { id: 1, short: "Start", label: "Set the scene" },
   { id: 2, short: "Crisis", label: "Untreated simulation" },
-  { id: 3, short: "Explore", label: "Research preview" },
+  { id: 3, short: "Explore", label: "Research possible interventions" },
   { id: 4, short: "Plan", label: "Recovery preview" },
 ];
 
@@ -113,12 +116,8 @@ function StartStage({
   );
 }
 
-function ResearchPreview({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
-  return <section className="py-10"><div className="rounded-[2rem] border border-slate-200 bg-white p-7 shadow-sm sm:p-10"><span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-amber-900">Coming next · no active agent</span><div className="mt-6 grid gap-10 lg:grid-cols-[0.9fr_1.1fr]"><div><p className="font-mono text-xs uppercase tracking-[0.2em] text-orange-600">Stage 03</p><h1 className="mt-3 text-4xl font-semibold tracking-tight text-slate-950">Researching possible ways out</h1><p className="mt-4 text-lg leading-8 text-slate-600">A later milestone will work backward from projected unpaid bills and gather evidence. No search, Gemini call, or recommendation runs here.</p></div><div className="grid gap-3 sm:grid-cols-2">{[["Transportation", "Verify realistic commute alternatives."], ["Attendance", "Check what could preserve threatened shifts."], ["Repair", "Research price, timing, and payment facts."], ["Bill flexibility", "Find documented options without assuming approval."]].map(([title, copy]) => <article key={title} className="rounded-2xl border border-slate-200 bg-slate-50 p-5"><h2 className="font-semibold text-slate-950">{title}</h2><p className="mt-2 text-sm leading-6 text-slate-600">{copy}</p></article>)}</div></div><div className="mt-8 rounded-2xl border border-dashed border-orange-300 bg-orange-50 p-6"><p className="text-xs font-semibold uppercase tracking-wide text-orange-800">Questions placeholder</p><p className="mt-3 text-lg font-medium text-slate-950">No clarifying question has been asked yet.</p></div></div><div className="mt-8 flex flex-col-reverse justify-between gap-3 sm:flex-row"><button type="button" onClick={onBack} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">← Back to crisis</button><button type="button" onClick={onNext} className="rounded-xl bg-slate-950 px-5 py-3 font-semibold text-white">Preview plan layout →</button></div></section>;
-}
-
 function PlanPreview({ onBack, onAdjust, onRestart }: { onBack: () => void; onAdjust: () => void; onRestart: () => void }) {
-  return <section className="py-10"><div className="rounded-[2rem] border border-slate-800 bg-slate-950 p-7 text-white shadow-xl sm:p-10"><span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Coming later · no recommendation generated</span><div className="mt-6 max-w-3xl"><p className="font-mono text-xs uppercase tracking-[0.2em] text-orange-300">Stage 04</p><h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">A coordinated recovery plan will live here.</h1><p className="mt-5 text-lg leading-8 text-slate-300">Build Sheet 04 will compare actions against the same simulation contract. This milestone does not discover, score, or recommend interventions.</p></div><div className="mt-10 grid gap-4 md:grid-cols-3">{["Plan actions", "Cash + bills", "Evidence + risks"].map((title, index) => <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5"><span className="font-mono text-xs text-slate-500">0{index + 1}</span><h2 className="mt-4 font-semibold text-slate-200">{title}</h2><div className="mt-4 space-y-2" aria-hidden="true"><div className="h-2 w-full rounded bg-white/10" /><div className="h-2 w-4/5 rounded bg-white/10" /></div></div>)}</div></div><div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-between"><button type="button" onClick={onBack} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">← Back to research preview</button><div className="flex gap-3"><button type="button" onClick={onAdjust} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">Adjust inputs</button><button type="button" onClick={onRestart} className="rounded-xl bg-orange-600 px-5 py-3 font-semibold text-white">Restart</button></div></div></section>;
+  return <section className="py-10"><div className="rounded-[2rem] border border-slate-800 bg-slate-950 p-7 text-white shadow-xl sm:p-10"><span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Coming later · no recommendation generated</span><div className="mt-6 max-w-3xl"><p className="font-mono text-xs uppercase tracking-[0.2em] text-orange-300">Stage 04</p><h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">A coordinated recovery plan will live here.</h1><p className="mt-5 text-lg leading-8 text-slate-300">Build Sheet 04 will compare actions against the same simulation contract. Explore has found possible interventions, but no action has been applied or financially validated yet.</p></div><div className="mt-10 grid gap-4 md:grid-cols-3">{["Plan actions", "Cash + bills", "Evidence + risks"].map((title, index) => <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5"><span className="font-mono text-xs text-slate-500">0{index + 1}</span><h2 className="mt-4 font-semibold text-slate-200">{title}</h2><div className="mt-4 space-y-2" aria-hidden="true"><div className="h-2 w-full rounded bg-white/10" /><div className="h-2 w-4/5 rounded bg-white/10" /></div></div>)}</div></div><div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-between"><button type="button" onClick={onBack} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">← Back to Explore</button><div className="flex gap-3"><button type="button" onClick={onAdjust} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">Adjust inputs</button><button type="button" onClick={onRestart} className="rounded-xl bg-orange-600 px-5 py-3 font-semibold text-white">Restart</button></div></div></section>;
 }
 
 export default function ScenarioApp() {
@@ -130,6 +129,9 @@ export default function ScenarioApp() {
   const [snapshot, setSnapshot] = useState<CustomerSnapshot | null>(null);
   const [simulation, setSimulation] = useState<CrisisSimulation | null>(null);
   const [requestState, setRequestState] = useState<RequestState>({ kind: "idle" });
+  const [research, setResearch] = useState<ResearchResult | null>(null);
+  const [researchState, setResearchState] = useState<RequestState>({ kind: "idle" });
+  const [routeContext, setRouteContext] = useState({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd });
   const snapshotQuery = useMemo(() => new URLSearchParams({ display_name: "Maya Rodriguez", hourly_rate_cents: "2000", repair_quote_cents: "40000" }), []);
 
   useEffect(() => {
@@ -150,6 +152,7 @@ export default function ScenarioApp() {
     const hourlyRateCents = wageInputToCents(hourlyWage);
     if (hourlyRateCents === null || !name.trim()) return;
     setRequestState({ kind: "loading" });
+    setResearch(null);
     try {
       const response = await fetch("/api/simulations/crisis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, affected_shift_count: affectedShifts }) });
       const body = (await response.json()) as CrisisSimulationResponse | { message?: string };
@@ -164,20 +167,43 @@ export default function ScenarioApp() {
     }
   }
 
+  async function runResearch(force: boolean) {
+    const hourlyRateCents = wageInputToCents(hourlyWage);
+    if (hourlyRateCents === null || !simulation) return;
+    setResearchState({ kind: "loading" });
+    try {
+      const response = await fetch("/api/research/interventions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(researchRequestBody({ displayName: name.trim(), hourlyRateCents, repairQuoteCents: repairQuote * 100, affectedShiftCount: affectedShifts }, routeContext, force)) });
+      const body = (await response.json()) as ResearchResponse | { message?: string };
+      if (!response.ok) throw new Error("message" in body && body.message ? body.message : "Research request failed.");
+      const result = body as ResearchResponse;
+      setSnapshot(result.snapshot);
+      setSimulation(result.simulation);
+      setResearch(result.research);
+      setResearchState({ kind: "idle" });
+    } catch (error) {
+      setResearchState({ kind: "error", message: error instanceof Error ? error.message : "Research request failed." });
+    }
+  }
+
+  function changeRouteContext(field: "home" | "work" | "shiftStart" | "shiftEnd", value: string) {
+    setRouteContext((previous) => ({ ...previous, [field]: value }));
+    setResearch(null);
+  }
+
   function restart() {
-    setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setAffectedShifts(2); setSimulation(null); setRequestState({ kind: "idle" }); setStage(1);
+    setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setAffectedShifts(2); setSimulation(null); setResearch(null); setRouteContext({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd }); setRequestState({ kind: "idle" }); setStage(1);
   }
 
   return (
     <main className="min-h-screen bg-[#f6f5f1] text-slate-950">
       <header className="border-b border-slate-200/80 bg-[#f6f5f1]/95"><div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between"><button type="button" onClick={() => setStage(1)} className="w-fit text-left"><span className="block font-mono text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">HackTX 2026</span><span className="mt-1 block text-lg font-semibold tracking-tight">One Bad Tuesday</span></button><StageNavigation current={stage} simulation={simulation} onNavigate={setStage} /></div></header>
       <div className="mx-auto max-w-7xl px-5 sm:px-8">
-        {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} affectedShifts={affectedShifts} snapshot={snapshot} requestState={requestState} onNameChange={setName} onWageChange={setHourlyWage} onRepairChange={setRepairQuote} onAffectedShiftsChange={setAffectedShifts} onSubmit={() => void runSimulation()} /> : null}
-        {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} affectedShifts={affectedShifts} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={setRepairQuote} onAffectedShiftsChange={setAffectedShifts} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
-        {stage === 3 && simulation ? <ResearchPreview onBack={() => setStage(2)} onNext={() => setStage(4)} /> : null}
+        {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} affectedShifts={affectedShifts} snapshot={snapshot} requestState={requestState} onNameChange={(value) => { setName(value); setResearch(null); }} onWageChange={(value) => { setHourlyWage(value); setResearch(null); }} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onAffectedShiftsChange={(value) => { setAffectedShifts(value); setResearch(null); }} onSubmit={() => void runSimulation()} /> : null}
+        {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} affectedShifts={affectedShifts} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onAffectedShiftsChange={(value) => { setAffectedShifts(value); setResearch(null); }} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
+        {stage === 3 && simulation ? <ResearchStage research={research} loading={researchState.kind === "loading"} error={researchState.kind === "error" ? researchState.message : null} home={routeContext.home} work={routeContext.work} shiftStart={routeContext.shiftStart} shiftEnd={routeContext.shiftEnd} onContextChange={changeRouteContext} onRun={(force) => void runResearch(force)} onBack={() => setStage(2)} onNext={() => setStage(4)} /> : null}
         {stage === 4 && simulation ? <PlanPreview onBack={() => setStage(3)} onAdjust={() => setStage(1)} onRestart={restart} /> : null}
       </div>
-      <footer className="border-t border-slate-200 px-5 py-6 text-center text-xs leading-5 text-slate-500">Synthetic crisis forecast for a HackTX prototype. No payment, loan, research agent, or recovery recommendation is executed.</footer>
+      <footer className="border-t border-slate-200 px-5 py-6 text-center text-xs leading-5 text-slate-500">Synthetic crisis forecast for a HackTX prototype. Research is informational; no payment, loan, or recovery plan is executed.</footer>
     </main>
   );
 }

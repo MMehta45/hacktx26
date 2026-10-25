@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     nessie_api_key: str | None = None
     serpapi_api_key: str | None = None
     gemini_api_key: str | None = None
+    gemini_model: str = "gemini-3.5-flash-lite"
+    research_max_calls: int = 6
+    research_rerun_max_calls: int = 8
+    research_max_iterations: int = 4
+    research_deadline_seconds: int = 85
+    research_cache_ttl_seconds: int = 900
     nessie_base_url: str = "https://prod-api.nessieisreal.com"
     demo_data_mode: Literal["auto", "fixture", "nessie"] = "auto"
     demo_anchor_date: date = date(2026, 10, 24)
