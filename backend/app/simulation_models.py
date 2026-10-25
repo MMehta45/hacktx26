@@ -202,6 +202,7 @@ class FinancialEvent(ApiModel):
     type: Literal[
         "paycheck",
         "bill_due",
+        "bill_payment",
         "lost_wages",
         "repair_payment",
         "action_expense",
@@ -233,6 +234,8 @@ class SimulationCashflowPoint(ApiModel):
     normal_balance_cents: int
     crisis_balance_cents: int
     constrained_available_cents: int = Field(ge=0)
+    outstanding_liability_cents: int = Field(default=0, ge=0)
+    outstanding_essential_cents: int = Field(default=0, ge=0)
     raw_shortfall: bool
 
 
@@ -248,6 +251,59 @@ class BillOutcome(ApiModel):
     projected_status: Literal["funded", "partially_unpaid", "unpaid"]
     payment_priority: int = Field(ge=1)
     source: str
+
+
+class LiabilityPayment(ApiModel):
+    date: date
+    amount_cents: int = Field(gt=0)
+    source: Literal["cash", "restricted_assistance"]
+
+
+class OutstandingLiability(ApiModel):
+    obligation_id: str
+    name: str
+    original_amount_cents: int = Field(ge=0)
+    original_due_date: date
+    adjusted_due_date: date
+    amount_paid_by_due_date_cents: int = Field(ge=0)
+    amount_unpaid_at_due_date_cents: int = Field(ge=0)
+    verified_fees_cents: int = Field(default=0, ge=0)
+    valid_credits_cents: int = Field(default=0, ge=0)
+    total_payments_cents: int = Field(ge=0)
+    outstanding_balance_cents: int = Field(ge=0)
+    later_payments: list[LiabilityPayment] = Field(default_factory=list)
+    fully_settled_date: date | None = None
+    essential: bool
+    category: str
+    source: str
+    provenance: str
+
+
+class WageAccounting(ApiModel):
+    earned_take_home_cents: int = Field(ge=0)
+    payroll_received_within_horizon_cents: int = Field(ge=0)
+    pay_for_horizon_shifts_received_cents: int = Field(ge=0)
+    earned_but_unpaid_cents: int = Field(ge=0)
+
+
+class VariableExpenseEstimate(ApiModel):
+    category: str
+    classification: Literal["essential_variable", "discretionary_variable"]
+    estimated_total_cents: int = Field(ge=0)
+    daily_rate_cents: int = Field(ge=0)
+    observation_days: int = Field(gt=0)
+    confidence: Literal["medium", "low"]
+    source_transaction_ids: list[str]
+    status: Literal["estimated"] = "estimated"
+    timing_basis: str
+
+
+class ForecastVariant(ApiModel):
+    id: Literal["scheduled_only", "essential_living", "full_behavioral"]
+    label: str
+    estimated_variable_expenses_cents: int = Field(ge=0)
+    projected_ending_balance_cents: int
+    note: str
 
 
 class ProblemNode(ApiModel):
@@ -291,11 +347,25 @@ class SimulationResult(ApiModel):
     income_lost_by_payday: list[IncomeLoss]
     bill_outcomes: list[BillOutcome]
     unpaid_bills: list[BillOutcome]
+    outstanding_liabilities: list[OutstandingLiability]
+    newly_missed_bills: list[BillOutcome]
+    past_due_obligations_settled_later: list[OutstandingLiability]
     normal_ending_balance_cents: int
     crisis_ending_balance_cents: int
     constrained_ending_cash_cents: int = Field(ge=0)
+    ending_liquid_cash_cents: int = Field(ge=0)
+    ending_outstanding_liabilities_cents: int = Field(ge=0)
+    ending_outstanding_essential_cents: int = Field(ge=0)
+    net_cash_position_after_liabilities_cents: int
     peak_funding_gap_cents: int = Field(ge=0)
+    first_shortfall_date: date | None = None
+    peak_gap_date: date | None = None
+    peak_outstanding_essential_cents: int = Field(ge=0)
     unpaid_essential_total_cents: int = Field(ge=0)
+    wage_accounting: WageAccounting
+    variable_expense_estimates: list[VariableExpenseEstimate]
+    forecast_variants: list[ForecastVariant]
+    cash_reconciliation_difference_cents: int = 0
     graph_nodes: list[ProblemNode]
     graph_edges: list[ProblemEdge]
     warnings: list[str]
@@ -304,6 +374,17 @@ class SimulationResult(ApiModel):
     def validate_timeline(self) -> "SimulationResult":
         if sum(event.type == "repair_payment" for event in self.events) > 1:
             raise ValueError("A crisis timeline may contain at most one repair payment.")
+        if self.cash_reconciliation_difference_cents != 0:
+            raise ValueError("Liquid cash ledger does not reconcile.")
+        for liability in self.outstanding_liabilities:
+            expected = (
+                liability.original_amount_cents
+                + liability.verified_fees_cents
+                - liability.valid_credits_cents
+                - liability.total_payments_cents
+            )
+            if expected != liability.outstanding_balance_cents:
+                raise ValueError(f"Liability {liability.obligation_id} does not reconcile.")
         return self
 
 

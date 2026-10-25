@@ -96,7 +96,7 @@ export type CrisisSimulation = {
   events: Array<{
     id: string;
     date: string;
-    type: "paycheck" | "bill_due" | "lost_wages" | "repair_payment" | "action_expense" | "assistance" | "borrowing" | "debt_payment" | "bill_fee" | "makeup_wages";
+    type: "paycheck" | "bill_due" | "bill_payment" | "lost_wages" | "repair_payment" | "action_expense" | "assistance" | "borrowing" | "debt_payment" | "bill_fee" | "makeup_wages";
     signed_amount_cents: number;
     description: string;
     source: string;
@@ -109,6 +109,8 @@ export type CrisisSimulation = {
     normal_balance_cents: number;
     crisis_balance_cents: number;
     constrained_available_cents: number;
+    outstanding_liability_cents: number;
+    outstanding_essential_cents: number;
     raw_shortfall: boolean;
   }>;
   income_lost_by_payday: Array<{
@@ -121,11 +123,23 @@ export type CrisisSimulation = {
   }>;
   bill_outcomes: BillOutcome[];
   unpaid_bills: BillOutcome[];
+  outstanding_liabilities: Array<{ obligation_id: string; name: string; original_amount_cents: number; original_due_date: string; adjusted_due_date: string; amount_paid_by_due_date_cents: number; amount_unpaid_at_due_date_cents: number; total_payments_cents: number; outstanding_balance_cents: number; fully_settled_date: string | null; essential: boolean; category: string; source: string; provenance: string }>;
+  newly_missed_bills: BillOutcome[];
   normal_ending_balance_cents: number;
   crisis_ending_balance_cents: number;
   constrained_ending_cash_cents: number;
+  ending_liquid_cash_cents: number;
+  ending_outstanding_liabilities_cents: number;
+  ending_outstanding_essential_cents: number;
+  net_cash_position_after_liabilities_cents: number;
   peak_funding_gap_cents: number;
+  first_shortfall_date: string | null;
+  peak_gap_date: string | null;
+  peak_outstanding_essential_cents: number;
   unpaid_essential_total_cents: number;
+  wage_accounting: { earned_take_home_cents: number; payroll_received_within_horizon_cents: number; pay_for_horizon_shifts_received_cents: number; earned_but_unpaid_cents: number };
+  variable_expense_estimates: Array<{ category: string; classification: "essential_variable" | "discretionary_variable"; estimated_total_cents: number; daily_rate_cents: number; confidence: "medium" | "low"; status: "estimated"; timing_basis: string }>;
+  forecast_variants: Array<{ id: "scheduled_only" | "essential_living" | "full_behavioral"; label: string; estimated_variable_expenses_cents: number; projected_ending_balance_cents: number; note: string }>;
   graph_nodes: Array<{
     id: string;
     label: string;

@@ -107,6 +107,9 @@ class PlanDelta(ApiModel):
     ending_balance_change_cents: int
     recovered_shift_ids: list[str]
     income_preserved_cents: int = Field(ge=0)
+    additional_take_home_earned_cents: int = Field(default=0, ge=0)
+    additional_pay_received_cents: int = Field(default=0, ge=0)
+    additional_pay_after_horizon_cents: int = Field(default=0, ge=0)
     incremental_cost_cents: int = Field(ge=0)
     repair_date_change_days: int | None = None
 
@@ -146,6 +149,10 @@ class PlanReconciliation(ApiModel):
     direct_income_preserved_cents: int = Field(default=0, ge=0)
     indirect_income_preserved_cents: int = Field(default=0, ge=0)
     total_income_preserved_cents: int = Field(default=0, ge=0)
+    direct_earned_take_home_cents: int = Field(default=0, ge=0)
+    indirect_earned_take_home_cents: int = Field(default=0, ge=0)
+    additional_pay_received_cents: int = Field(default=0, ge=0)
+    additional_pay_after_horizon_cents: int = Field(default=0, ge=0)
     payday_differences: dict[str, int] = Field(default_factory=dict)
     unpaid_bills: list[BillOutcome] = Field(default_factory=list)
     worst_gap_date: date | None = None
@@ -169,6 +176,7 @@ class RecoveryPlan(ApiModel):
     result: SimulationResult
     delta: PlanDelta
     ranking_rationale: list[str]
+    ranking_score: int = 0
     explanation: str
     sources: list[PlanSource]
     outreach_drafts: list[OutreachDraft]

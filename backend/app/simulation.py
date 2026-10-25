@@ -1,3 +1,4 @@
+from collections import defaultdict
 from collections.abc import Sequence
 from datetime import date, datetime, time, timedelta
 from decimal import ROUND_HALF_UP, Decimal
@@ -13,8 +14,11 @@ from app.simulation_models import (
     CrisisSimulationRequest,
     ExpenseEffect,
     FinancialEvent,
+    ForecastVariant,
     IncomeLoss,
+    LiabilityPayment,
     MakeupHoursEffect,
+    OutstandingLiability,
     PayrollRecord,
     PreserveShiftEffect,
     ProblemEdge,
@@ -27,11 +31,46 @@ from app.simulation_models import (
     SimulationResult,
     SimulationScenario,
     SimulationSource,
+    VariableExpenseEstimate,
+    WageAccounting,
 )
 
 SHIFT_START = time(8, 0)
 SHIFT_END = time(16, 0)
 TAKE_HOME_BASIS_POINTS = 8_000
+
+
+def _variable_expense_estimates(
+    snapshot: CustomerSnapshot, horizon_days: int, *, gas_projection_days: int
+) -> list[VariableExpenseEstimate]:
+    excluded_fixed = {"Housing/Rent", "Utilities", "Insurance", "Subscriptions"}
+    essential = {"Groceries", "Health", "Transportation/Gas"}
+    discretionary = {"Dining", "Shopping"}
+    observed_days = max(1, (snapshot.history.end - snapshot.history.start).days + 1)
+    grouped: dict[str, list] = defaultdict(list)
+    for transaction in snapshot.history.transactions:
+        if transaction.direction == "debit" and transaction.category not in excluded_fixed:
+            grouped[transaction.category].append(transaction)
+    estimates: list[VariableExpenseEstimate] = []
+    for category, transactions in sorted(grouped.items()):
+        if category not in essential | discretionary or len(transactions) < 2:
+            continue
+        total = sum(item.amount_cents for item in transactions)
+        daily = round(total / observed_days)
+        projection_days = gas_projection_days if category == "Transportation/Gas" else horizon_days + 1
+        estimates.append(VariableExpenseEstimate(
+            category=category,
+            classification="essential_variable" if category in essential else "discretionary_variable",
+            estimated_total_cents=daily * projection_days,
+            daily_rate_cents=daily,
+            observation_days=observed_days,
+            confidence="medium" if len(transactions) >= 3 else "low",
+            source_transaction_ids=[item.id for item in transactions],
+            timing_basis=(
+                f"Historical category spend divided across {observed_days} observed days and projected only across {projection_days} applicable days; separate estimate, not a scheduled bill."
+            ),
+        ))
+    return estimates
 
 
 def _multiply_basis_points(amount_cents: int, basis_points: int) -> int:
@@ -280,11 +319,15 @@ def simulate(
     last_blocked_reason: str | None = None
     last_protected: list[ProtectedObligation] = []
     constrained_cash = max(0, balance)
+    liquid_inflows = 0
+    liquid_outflows = 0
     normal_balance = balance
     crisis_balance = balance
     points: list[SimulationCashflowPoint] = []
     events: list[FinancialEvent] = []
     bill_outcomes: list[BillOutcome] = []
+    liability_state: dict[str, dict] = {}
+    peak_outstanding_essential = 0
     priority_counter = 1
 
     def attendance_for(workday: date) -> str:
@@ -346,14 +389,22 @@ def simulate(
                     restricted_assistance[obligation_id] = (
                         restricted_assistance.get(obligation_id, 0) + amount
                     )
-            if not is_restricted:
-                constrained_cash = max(0, constrained_cash + amount)
+            actual_amount = amount
+            if amount >= 0:
+                liquid_inflows += amount
+                if not is_restricted:
+                    constrained_cash += amount
+            else:
+                actual_outflow = min(constrained_cash, -amount)
+                constrained_cash -= actual_outflow
+                liquid_outflows += actual_outflow
+                actual_amount = -actual_outflow
             events.append(
                 FinancialEvent(
                     id=ledger_id,
                     date=current,
                     type=event_type,  # type: ignore[arg-type]
-                    signed_amount_cents=amount,
+                    signed_amount_cents=actual_amount,
                     description=description,
                     source="recovery_action",
                     status="scenario_assumption",
@@ -367,7 +418,21 @@ def simulate(
                 current == breakdown_date and breakdown_at > shift_start
             ) or (repair_date is not None and repair_date < current)
             shift_id = f"shift-{current.isoformat()}"
-            action_preserved = shift_id in preserve_shift_ids
+            preserving_actions = preserve_actions_by_shift.get(shift_id, set())
+            shift_expenses = [
+                expense
+                for expense in conditional_shift_expenses.get(current, [])
+                if shift_id in expense.supported_shift_ids
+            ]
+            transit_action_ids = {expense.action_id for expense in shift_expenses}
+            no_cost_preserver = bool(preserving_actions - transit_action_ids)
+            affordable_transit = any(
+                expense.action_id in preserving_actions and constrained_cash >= expense.amount_cents
+                for expense in shift_expenses
+            )
+            action_preserved = shift_id in preserve_shift_ids and (
+                no_cost_preserver or affordable_transit or not shift_expenses
+            )
             attendance = "worked" if vehicle_usable or action_preserved else "projected_missed"
             reason = (
                 "A recovery action preserves this shift under its explicit conditions."
@@ -401,16 +466,18 @@ def simulate(
                     action_id != expense.action_id
                     for action_id in preserve_actions_by_shift.get(shift_id, set())
                 )
-                if not supports_current_shift or vehicle_usable or other_preserver:
+                if not supports_current_shift or vehicle_usable or other_preserver or not action_preserved:
                     continue
                 crisis_balance -= expense.amount_cents
-                constrained_cash = max(0, constrained_cash - expense.amount_cents)
+                actual_fare = min(constrained_cash, expense.amount_cents)
+                constrained_cash -= actual_fare
+                liquid_outflows += actual_fare
                 events.append(
                     FinancialEvent(
                         id=expense.ledger_id,
                         date=current,
                         type="action_expense",
-                        signed_amount_cents=-expense.amount_cents,
+                        signed_amount_cents=-actual_fare,
                         description=expense.description,
                         source="recovery_action",
                         status="scenario_assumption",
@@ -454,7 +521,8 @@ def simulate(
             normal_balance += net_week
             crisis_balance += actual
             constrained_cash += actual
-            events.append(FinancialEvent(id=f"paycheck-{current.isoformat()}", date=current, type="paycheck", signed_amount_cents=net_week, description="Normal weekly take-home paycheck", source="user_wage_forecast", status="projected"))
+            liquid_inflows += actual
+            events.append(FinancialEvent(id=f"paycheck-{current.isoformat()}", date=current, type="paycheck", signed_amount_cents=actual, description="Attendance-derived projected take-home paycheck", source="user_wage_forecast", status="projected"))
             if payroll.lost_take_home_cents:
                 events.append(FinancialEvent(id=f"lost-wages-{current.isoformat()}", date=current, type="lost_wages", signed_amount_cents=-payroll.lost_take_home_cents, description=f"Estimated take-home lost from {missed} derived missed shift(s)", source="crisis_projection", status="projected"))
             if makeup:
@@ -465,14 +533,63 @@ def simulate(
             normal_balance -= bill.amount_cents
             crisis_balance -= bill.amount_cents
             restricted = min(restricted_assistance.get(bill.id, 0), bill.amount_cents)
+            restricted_assistance[bill.id] = restricted_assistance.get(bill.id, 0) - restricted
             cash_needed = bill.amount_cents - restricted
             cash_funded = min(constrained_cash, cash_needed)
             funded = restricted + cash_funded
             constrained_cash -= cash_funded
+            liquid_outflows += funded
             unpaid = bill.amount_cents - funded
+            liability_state[bill.id] = {
+                "bill": bill,
+                "paid_by_due": funded,
+                "total_paid": funded,
+                "outstanding": unpaid,
+                "later_payments": [],
+                "settled": current if unpaid == 0 else None,
+            }
             bill_outcomes.append(BillOutcome(obligation_id=bill.id, name=bill.name, amount_cents=bill.amount_cents, due_date=bill.due_date, funded_cents=funded, unpaid_cents=unpaid, essential=bill.essential, category=bill.category, projected_status="funded" if unpaid == 0 else "unpaid" if funded == 0 else "partially_unpaid", payment_priority=priority_counter, source=bill.source))
             priority_counter += 1
             events.append(FinancialEvent(id=f"bill-{bill.source}-{bill.id}", date=current, type="bill_due", signed_amount_cents=-bill.amount_cents, description=f"{bill.name} due", source=bill.source, status="projected", provenance_id=bill.nessie_bill_id or bill.id, essential=bill.essential))
+            if funded:
+                events.append(FinancialEvent(id=f"bill-payment-{bill.id}-{current.isoformat()}", date=current, type="bill_payment", signed_amount_cents=-funded, description=f"{bill.name} payment allocated", source=bill.source, status="projected", provenance_id=bill.nessie_bill_id or bill.id, essential=bill.essential))
+
+        # After today's obligations, settle older essentials before discretionary
+        # arrears. This changes liquid cash only; the scheduled-obligation balance
+        # already recognized the full bill on its due date.
+        overdue = sorted(
+            (
+                state for state in liability_state.values()
+                if state["outstanding"] > 0 and state["bill"].due_date < current
+            ),
+            key=lambda state: (not state["bill"].essential, state["bill"].due_date, state["bill"].id),
+        )
+        future_shift_at_risk = any(
+            day.weekday() < 5
+            for day in (current + timedelta(days=offset) for offset in range(1, (end - current).days + 1))
+        )
+        repair_reserve = (
+            repair_quote_cents
+            if repair_date is None
+            and current >= repair_earliest_date
+            and future_shift_at_risk
+            and constrained_cash >= repair_quote_cents
+            else 0
+        )
+        for state in overdue:
+            available_for_arrears = max(0, constrained_cash - repair_reserve)
+            if available_for_arrears <= 0:
+                break
+            payment = min(available_for_arrears, state["outstanding"])
+            constrained_cash -= payment
+            liquid_outflows += payment
+            state["outstanding"] -= payment
+            state["total_paid"] += payment
+            state["later_payments"].append(LiabilityPayment(date=current, amount_cents=payment, source="cash"))
+            if state["outstanding"] == 0:
+                state["settled"] = current
+            bill = state["bill"]
+            events.append(FinancialEvent(id=f"past-due-payment-{bill.id}-{current.isoformat()}", date=current, type="bill_payment", signed_amount_cents=-payment, description=f"Past-due {bill.name} payment", source=bill.source, status="projected", provenance_id=bill.nessie_bill_id or bill.id, essential=bill.essential))
 
         # Repair is considered last. A same-day payment cannot restore the 08:00 shift.
         if current >= repair_earliest_date and repair_date is None:
@@ -484,6 +601,7 @@ def simulate(
                 repair_date = current
                 constrained_cash -= repair_quote_cents
                 crisis_balance -= repair_quote_cents
+                liquid_outflows += repair_quote_cents
                 repair_cash_after = constrained_cash
                 events.append(FinancialEvent(id="repair-payment", date=current, type="repair_payment", signed_amount_cents=-repair_quote_cents, description="Bill-protective projected repair payment", source="crisis_projection", status="projected"))
                 last_blocked_reason = None
@@ -494,7 +612,12 @@ def simulate(
                     f"the quote and protect essential bills through {payday_text}."
                 )
 
-        points.append(SimulationCashflowPoint(date=current, normal_balance_cents=normal_balance, crisis_balance_cents=crisis_balance, constrained_available_cents=constrained_cash, raw_shortfall=crisis_balance < 0))
+        outstanding_total = sum(state["outstanding"] for state in liability_state.values())
+        outstanding_essential = sum(
+            state["outstanding"] for state in liability_state.values() if state["bill"].essential
+        )
+        peak_outstanding_essential = max(peak_outstanding_essential, outstanding_essential)
+        points.append(SimulationCashflowPoint(date=current, normal_balance_cents=normal_balance, crisis_balance_cents=crisis_balance, constrained_available_cents=constrained_cash, outstanding_liability_cents=outstanding_total, outstanding_essential_cents=outstanding_essential, raw_shortfall=crisis_balance < 0))
 
     losses = [
         IncomeLoss(
@@ -523,8 +646,81 @@ def simulate(
         policy="Pay the full quote only after due bills when cash also protects essential obligations through the next payday supported by earned or attendable work.",
     )
     unpaid_bills = [item for item in bill_outcomes if item.essential and item.unpaid_cents > 0]
+    fee_by_bill = {
+        effect.obligation_id: effect.fee_cents
+        for effect in actions if isinstance(effect, BillDueDateEffect)
+    }
+    credit_by_bill = {
+        effect.obligation_id: effect.reduction_cents
+        for effect in actions if isinstance(effect, BillReductionEffect)
+    }
+    original_due_by_bill = {
+        effect.obligation_id: effect.original_due_date
+        for effect in actions if isinstance(effect, BillDueDateEffect)
+    }
+    outstanding_liabilities = []
+    for state in liability_state.values():
+        bill = state["bill"]
+        fees = fee_by_bill.get(bill.id, 0)
+        credits = credit_by_bill.get(bill.id, 0)
+        original_amount = bill.amount_cents - fees + credits
+        outstanding_liabilities.append(OutstandingLiability(
+            obligation_id=bill.id, name=bill.name,
+            original_amount_cents=original_amount,
+            original_due_date=original_due_by_bill.get(bill.id, bill.due_date),
+            adjusted_due_date=bill.due_date,
+            amount_paid_by_due_date_cents=state["paid_by_due"],
+            amount_unpaid_at_due_date_cents=max(0, bill.amount_cents - state["paid_by_due"]),
+            verified_fees_cents=fees, valid_credits_cents=credits,
+            total_payments_cents=state["total_paid"],
+            outstanding_balance_cents=state["outstanding"],
+            later_payments=state["later_payments"], fully_settled_date=state["settled"],
+            essential=bill.essential, category=bill.category, source=bill.source,
+            provenance=bill.provenance,
+        ))
+    outstanding_liabilities.sort(key=lambda item: (item.adjusted_due_date, item.obligation_id))
+    ending_outstanding = sum(item.outstanding_balance_cents for item in outstanding_liabilities)
+    ending_outstanding_essential = sum(
+        item.outstanding_balance_cents for item in outstanding_liabilities if item.essential
+    )
     peak_gap = max(0, -min(point.crisis_balance_cents for point in points))
-    event_priority = {"assistance": 0, "borrowing": 0, "action_expense": 1, "paycheck": 2, "makeup_wages": 3, "lost_wages": 4, "bill_due": 5, "bill_fee": 5, "debt_payment": 6, "repair_payment": 7}
+    first_shortfall = next((point.date for point in points if point.crisis_balance_cents < 0), None)
+    peak_gap_point = min(points, key=lambda point: point.crisis_balance_cents)
+    worked_shifts = [shift for shift in shift_records if shift.attendance == "worked"]
+    earned_take_home = sum(shift.take_home_earning_potential_cents for shift in worked_shifts)
+    pay_for_horizon_shifts_received = sum(
+        shift.take_home_earning_potential_cents
+        for shift in worked_shifts if shift.associated_payday <= end
+    )
+    earned_but_unpaid = sum(
+        shift.take_home_earning_potential_cents
+        for shift in worked_shifts if shift.associated_payday > end
+    )
+    wage_accounting = WageAccounting(
+        earned_take_home_cents=earned_take_home,
+        payroll_received_within_horizon_cents=sum(item.actual_projected_take_home_cents for item in payroll_records),
+        pay_for_horizon_shifts_received_cents=pay_for_horizon_shifts_received,
+        earned_but_unpaid_cents=earned_but_unpaid,
+    )
+    gas_projection_days = sum(
+        1
+        for point in points
+        if point.date < breakdown_date or (repair_date is not None and point.date > repair_date)
+    )
+    variable_estimates = _variable_expense_estimates(
+        snapshot, request.forecast_horizon_days, gas_projection_days=gas_projection_days
+    )
+    essential_estimate = sum(item.estimated_total_cents for item in variable_estimates if item.classification == "essential_variable")
+    discretionary_estimate = sum(item.estimated_total_cents for item in variable_estimates if item.classification == "discretionary_variable")
+    variants = [
+        ForecastVariant(id="scheduled_only", label="Scheduled bills only", estimated_variable_expenses_cents=0, projected_ending_balance_cents=points[-1].crisis_balance_cents, note="Contractual and explicitly scheduled obligations only."),
+        ForecastVariant(id="essential_living", label="Essential living expenses included", estimated_variable_expenses_cents=essential_estimate, projected_ending_balance_cents=points[-1].crisis_balance_cents - essential_estimate, note="Separate historical estimate; does not alter the scheduled-bill ledger."),
+        ForecastVariant(id="full_behavioral", label="Supported discretionary spending included", estimated_variable_expenses_cents=essential_estimate + discretionary_estimate, projected_ending_balance_cents=points[-1].crisis_balance_cents - essential_estimate - discretionary_estimate, note="Separate estimated scenario; not a contractual obligation."),
+    ]
+    reserved_remaining = sum(restricted_assistance.values())
+    ending_liquid = constrained_cash + reserved_remaining
+    reconciliation_difference = balance + liquid_inflows - liquid_outflows - ending_liquid
+    event_priority = {"assistance": 0, "borrowing": 0, "action_expense": 1, "paycheck": 2, "makeup_wages": 3, "lost_wages": 4, "bill_due": 5, "bill_payment": 6, "bill_fee": 5, "debt_payment": 7, "repair_payment": 8}
     events.sort(key=lambda item: (item.date, event_priority[item.type], item.id))
     nodes = _graph_nodes(snapshot=snapshot, breakdown_date=breakdown_date, shifts=shift_records, payrolls=payroll_records, repair=repair, cashflow=points, unpaid_bills=unpaid_bills, peak_gap_cents=peak_gap)
     return SimulationResult(
@@ -539,11 +735,25 @@ def simulate(
         income_lost_by_payday=losses,
         bill_outcomes=bill_outcomes,
         unpaid_bills=unpaid_bills,
+        outstanding_liabilities=outstanding_liabilities,
+        newly_missed_bills=[item for item in bill_outcomes if item.unpaid_cents > 0],
+        past_due_obligations_settled_later=[item for item in outstanding_liabilities if item.later_payments and item.outstanding_balance_cents == 0],
         normal_ending_balance_cents=points[-1].normal_balance_cents,
         crisis_ending_balance_cents=points[-1].crisis_balance_cents,
         constrained_ending_cash_cents=points[-1].constrained_available_cents,
+        ending_liquid_cash_cents=ending_liquid,
+        ending_outstanding_liabilities_cents=ending_outstanding,
+        ending_outstanding_essential_cents=ending_outstanding_essential,
+        net_cash_position_after_liabilities_cents=ending_liquid - ending_outstanding,
         peak_funding_gap_cents=peak_gap,
-        unpaid_essential_total_cents=sum(item.unpaid_cents for item in unpaid_bills),
+        first_shortfall_date=first_shortfall,
+        peak_gap_date=peak_gap_point.date if peak_gap else None,
+        peak_outstanding_essential_cents=peak_outstanding_essential,
+        unpaid_essential_total_cents=ending_outstanding_essential,
+        wage_accounting=wage_accounting,
+        variable_expense_estimates=variable_estimates,
+        forecast_variants=variants,
+        cash_reconciliation_difference_cents=reconciliation_difference,
         graph_nodes=nodes,
         graph_edges=_graph_edges(),
         warnings=warnings,

@@ -58,6 +58,11 @@ _sessions: dict[str, StoredRecoverySession] = {}
 _targeted_cache: dict[str, list[Evidence]] = {}
 
 
+def _money(cents: int) -> str:
+    sign = "-" if cents < 0 else ""
+    return f"{sign}${abs(cents) / 100:,.2f}"
+
+
 def _fingerprint(snapshot: CustomerSnapshot, scenario: object) -> str:
     payload = {
         "customer": snapshot.customer.id,
@@ -644,6 +649,15 @@ def _plan_details(selected, action_ids, baseline, result, evidence, drafts):
     payday_differences = {str(day): after_pay[day] - before_pay.get(day, 0) for day in after_pay if after_pay[day] != before_pay.get(day, 0)}
     direct_pay = sum(item.take_home_earning_potential_cents for item in baseline.shift_records if item.id in direct)
     total_pay = sum(payday_differences.values())
+    indirect_earned = sum(
+        item.take_home_earning_potential_cents
+        for item in baseline.shift_records if item.id in indirect
+    )
+    additional_after_horizon = max(
+        0,
+        result.wage_accounting.earned_but_unpaid_cents
+        - baseline.wage_accounting.earned_but_unpaid_cents,
+    )
     timeline: list[PlanTimelineEvent] = [PlanTimelineEvent(date=baseline.scenario.scenario_start_date, event_type="decision", label="Review this recovery plan", action_ids=list(action_ids))]
     for shift in result.shift_records:
         if shift.id in recovered:
@@ -658,6 +672,10 @@ def _plan_details(selected, action_ids, baseline, result, evidence, drafts):
         direct_recovered_shift_ids=sorted(set(direct) & recovered), indirect_recovered_shift_ids=indirect,
         remaining_missed_shift_ids=remaining, direct_income_preserved_cents=max(0, direct_pay),
         indirect_income_preserved_cents=max(0, total_pay - direct_pay), total_income_preserved_cents=max(0, total_pay),
+        direct_earned_take_home_cents=max(0, direct_pay),
+        indirect_earned_take_home_cents=max(0, indirect_earned),
+        additional_pay_received_cents=max(0, total_pay),
+        additional_pay_after_horizon_cents=additional_after_horizon,
         payday_differences=payday_differences, unpaid_bills=result.unpaid_bills,
         worst_gap_date=gap.date if gap else None,
     )
@@ -729,6 +747,21 @@ def _evaluate(
                 ending_balance_change_cents=result.crisis_ending_balance_cents - baseline.crisis_ending_balance_cents,
                 recovered_shift_ids=recovered,
                 income_preserved_cents=income_preserved,
+                additional_take_home_earned_cents=max(
+                    0,
+                    result.wage_accounting.earned_take_home_cents
+                    - baseline.wage_accounting.earned_take_home_cents,
+                ),
+                additional_pay_received_cents=max(
+                    0,
+                    result.wage_accounting.pay_for_horizon_shifts_received_cents
+                    - baseline.wage_accounting.pay_for_horizon_shifts_received_cents,
+                ),
+                additional_pay_after_horizon_cents=max(
+                    0,
+                    result.wage_accounting.earned_but_unpaid_cents
+                    - baseline.wage_accounting.earned_but_unpaid_cents,
+                ),
                 incremental_cost_cents=_incremental_cost(effects, result),
                 repair_date_change_days=repair_change,
             )
@@ -753,9 +786,24 @@ def _evaluate(
                 f"{session.scenario_fingerprint}|{'|'.join(action_ids)}".encode()
             ).hexdigest()[:12]
             explanation = (
-                f"Under the listed conditions, the simulator recovers {len(recovered)} shift(s), "
-                f"preserves {income_preserved} cents of take-home pay, and changes uncovered "
-                f"essential bills by {delta.essential_unpaid_change_cents} cents."
+                f"Under the listed conditions, this recovers {len(recovered)} shift(s), adds "
+                f"{_money(delta.additional_take_home_earned_cents)} of take-home earnings, and deposits "
+                f"{_money(delta.additional_pay_received_cents)} of that additional pay by the forecast end. "
+                f"Projected available cash ends at {_money(result.ending_liquid_cash_cents)} with "
+                f"{_money(result.ending_outstanding_essential_cents)} of essential bills still outstanding."
+            )
+            feasibility_penalty = {
+                "ready_with_confirmed_conditions": 0,
+                "conditional_pending_approval": 15_000,
+                "conditional_pending_information": 10_000,
+            }[feasibility]
+            impact_score = (
+                delta.additional_take_home_earned_cents
+                + max(0, baseline.ending_outstanding_essential_cents - result.ending_outstanding_essential_cents) * 2
+                + max(0, result.net_cash_position_after_liabilities_cents - baseline.net_cash_position_after_liabilities_cents)
+                - delta.incremental_cost_cents
+                - feasibility_penalty
+                - len(unresolved) * 2_500
             )
             plan = RecoveryPlan(
                 id=plan_id,
@@ -776,10 +824,11 @@ def _evaluate(
                 delta=delta,
                 ranking_rationale=[
                     f"Feasibility: {feasibility.replace('_', ' ')}.",
-                    f"Essential bills uncovered: {result.unpaid_essential_total_cents} cents.",
-                    f"Peak funding gap: {result.peak_funding_gap_cents} cents.",
-                    f"Recovered shifts: {len(recovered)}; incremental action cost: {delta.incremental_cost_cents} cents.",
+                    f"Essential bills outstanding at forecast end: {_money(result.ending_outstanding_essential_cents)}.",
+                    f"Peak scheduled-obligation funding gap: {_money(result.peak_funding_gap_cents)}.",
+                    f"Recovered shifts: {len(recovered)}; transportation and action costs: {_money(delta.incremental_cost_cents)}.",
                 ],
+                ranking_score=impact_score,
                 explanation=explanation,
                 sources=plan_sources,
                 outreach_drafts=[drafts[item] for item in action_ids if item in drafts],
@@ -794,12 +843,11 @@ def _evaluate(
                 "conditional_pending_information": 2,
             }[feasibility]
             key = (
+                -impact_score,
                 feasibility_order,
-                result.unpaid_essential_total_cents,
-                len(result.unpaid_bills),
+                result.ending_outstanding_essential_cents,
+                -delta.additional_take_home_earned_cents,
                 result.peak_funding_gap_cents,
-                -len(recovered),
-                delta.incremental_cost_cents,
                 len(unresolved),
                 len(selected),
                 action_ids,

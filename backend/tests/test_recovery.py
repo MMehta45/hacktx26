@@ -79,7 +79,7 @@ def test_duplicate_shift_coverage_recovers_wages_once() -> None:
 
 
 def test_demo_route_5_is_quantified_and_only_charged_when_it_is_used() -> None:
-    snapshot = example_snapshot(balance_cents=0)
+    snapshot = example_snapshot(balance_cents=1_000)
     request = default_request(forecast_horizon_days=14, repair_quote_cents=150_000)
     baseline = simulate(snapshot, request)
     evidence = maya_route_5_fixture("Maya Rodriguez", ResearchContext(), baseline)

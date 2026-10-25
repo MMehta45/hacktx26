@@ -207,6 +207,54 @@ def test_bill_before_payday_cannot_use_future_income() -> None:
     assert result.bill_outcomes[0].unpaid_cents == 9_000
 
 
+def test_unpaid_bill_is_carried_and_later_payroll_settles_it_once() -> None:
+    result = simulate(
+        example_snapshot(bills=[bill("electricity", 40_000, date(2026, 10, 25))]),
+        default_request(forecast_horizon_days=7, repair_quote_cents=150_000),
+    )
+    liability = result.outstanding_liabilities[0]
+    assert liability.amount_unpaid_at_due_date_cents == 9_000
+    assert liability.outstanding_balance_cents == 0
+    assert liability.total_payments_cents == 40_000
+    assert liability.fully_settled_date == FIRST_PAYDAY
+    assert sum(item.amount_cents for item in liability.later_payments) == 9_000
+    assert result.ending_liquid_cash_cents == 55_000
+    assert result.cash_reconciliation_difference_cents == 0
+
+
+def test_raw_shortfall_liquid_cash_and_outstanding_are_not_double_counted() -> None:
+    result = simulate(
+        example_snapshot(bills=[bill("electricity", 40_000, date(2026, 10, 25))]),
+        default_request(forecast_horizon_days=1, breakdown_date=date(2026, 10, 25)),
+    )
+    assert result.crisis_ending_balance_cents == -9_000
+    assert result.ending_liquid_cash_cents == 0
+    assert result.ending_outstanding_essential_cents == 9_000
+    assert result.net_cash_position_after_liabilities_cents == -9_000
+    assert result.peak_funding_gap_cents == 9_000
+    assert result.peak_outstanding_essential_cents == 9_000
+
+
+def test_earned_received_and_payable_after_horizon_are_separate() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=50_000),
+        default_request(breakdown_time_local=time(9), repair_quote_cents=150_000),
+    )
+    assert result.wage_accounting.earned_take_home_cents == 12_800
+    assert result.wage_accounting.payroll_received_within_horizon_cents == 64_000
+    assert result.wage_accounting.pay_for_horizon_shifts_received_cents == 0
+    assert result.wage_accounting.earned_but_unpaid_cents == 12_800
+
+
+def test_variable_living_expenses_are_separate_estimated_variants() -> None:
+    result = simulate(example_snapshot(), default_request())
+    variants = {item.id: item for item in result.forecast_variants}
+    assert result.variable_expense_estimates
+    assert variants["scheduled_only"].estimated_variable_expenses_cents == 0
+    assert variants["essential_living"].estimated_variable_expenses_cents > 0
+    assert variants["full_behavioral"].estimated_variable_expenses_cents >= variants["essential_living"].estimated_variable_expenses_cents
+
+
 def test_bill_protective_policy_reserves_near_term_essential_cash() -> None:
     result = simulate(
         example_snapshot(

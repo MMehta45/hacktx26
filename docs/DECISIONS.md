@@ -1,5 +1,13 @@
 # Architecture decisions
 
+## M5 — Cash, liabilities, wages, and ranking are separate ledgers
+
+The scheduled-obligation balance remains a theoretical funding-needs projection and may be negative. Projected available cash is constrained to actual allocated payments and cannot go below zero. Bills missed at their due date create liability records that retain original due-date funding, later payments, settlement date, provenance, and ending outstanding balance. The default allocation pays current essentials, reserves a repair when that payment can preserve future scheduled work, then settles older essentials before discretionary arrears. This prevents a small arrears payment from causing a repair/income death spiral while never erasing the arrears.
+
+Wage accounting now separately reports take-home earned by in-horizon shifts, payroll received in the horizon, pay for in-horizon shifts received, and earnings payable after the horizon. Historical variable spending is exposed as separate scheduled-only, essential-living, and fuller behavioral forecast variants; it does not silently alter the contractual bill ledger.
+
+Recovery ranking uses an explainable impact score: additional earnings plus improvements in essential liabilities and net cash position, minus actual action costs, unresolved-condition penalties, and a feasibility penalty. The raw score has no probability interpretation. Conditional outcomes remain labeled conditional.
+
 ## M4.5 — Route 5 is an outage-duration strategy
 
 The deterministic Route 5 fixture is represented in Recovery as one multi-day transportation action with one preserve-shift and one conditional $2.50 expense effect per eligible baseline missed weekday. The simulator, rather than the action definition, determines which of those offered trips are actually used: remote work takes precedence for an overlapping shift, and car restoration stops later transit fares. Recovery returns up to eight distinct strategy signatures instead of enforcing a three-card cap; all ranks remain the optimizer's actual ranks.
