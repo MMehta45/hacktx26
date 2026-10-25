@@ -225,6 +225,7 @@ class CandidateAction(ApiModel):
     timing: CandidateTiming = Field(default_factory=CandidateTiming)
     potential_effects: PotentialEffects = Field(default_factory=PotentialEffects)
     evidence_ids: list[str] = Field(default_factory=list)
+    hypothesis_ids: list[str] = Field(default_factory=list)
     verification_status: Literal["hypothesis", "researched", "conditional", "unverified", "blocked"]
     remaining_unknowns: list[str] = Field(default_factory=list)
     confidence_explanation: str = "Further verification required."
@@ -283,6 +284,29 @@ class ResearchExtraction(ApiModel):
     clarifying_questions: list[ClarifyingQuestion] = Field(default_factory=list, max_length=8)
 
 
+class ExtractionDiagnostic(ApiModel):
+    attempt: int = Field(ge=1, le=2)
+    code: Literal["malformed_json", "schema_validation", "truncated", "provider_error"]
+    message: str
+    finish_reason: str | None = None
+    output_tokens: int | None = Field(default=None, ge=0)
+    recovered: bool = False
+
+
+class HypothesisOutcome(ApiModel):
+    hypothesis_id: str
+    status: Literal[
+        "viable_candidate",
+        "conditional_candidate",
+        "blocked",
+        "rejected",
+        "insufficient_evidence",
+    ]
+    candidate_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    reason: str
+
+
 class ResearchEvent(ApiModel):
     id: str
     type: Literal[
@@ -293,6 +317,8 @@ class ResearchEvent(ApiModel):
         "search_failed",
         "evidence_found",
         "candidate_extracted",
+        "extraction_retry",
+        "extraction_fallback",
         "question_identified",
         "research_finished",
         "pathway_started",
@@ -355,6 +381,8 @@ class ResearchResult(ApiModel):
     research_events: list[ResearchEvent]
     evidence: list[Evidence]
     candidate_actions: list[CandidateAction]
+    hypothesis_outcomes: list[HypothesisOutcome] = Field(default_factory=list)
+    extraction_diagnostics: list[ExtractionDiagnostic] = Field(default_factory=list)
     clarifying_questions: list[ClarifyingQuestion] = Field(default_factory=list, max_length=8)
     initial_question_ids: list[str] = Field(default_factory=list, max_length=2)
     tool_calls_used: int = Field(ge=0)

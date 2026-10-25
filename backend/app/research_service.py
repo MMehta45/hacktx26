@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.config import Settings
-from app.research_agent import LiveGemini, research_with_agent
+from app.research_agent import LiveGemini, ResearchRunMeta, research_with_agent
 from app.research_graph import rank_targets
 from app.research_models import ResearchRequest, ResearchResponse, ResearchResult
 from app.research_serpapi import SerpResearch
@@ -82,7 +82,7 @@ def run_research(
         else settings.research_rerun_max_calls,
     )
     try:
-        evidence, candidates, questions, events, pathways, agent_warnings, hypotheses = (
+        evidence, candidates, questions, events, pathways, agent_warnings, hypotheses, meta = (
             research_with_agent(
                 simulation=simulation,
                 context=request.context,
@@ -94,7 +94,7 @@ def run_research(
             )
         )
     except Exception:  # noqa: BLE001 - never expose provider exceptions or credentials to the API
-        evidence, candidates, questions, events, pathways, agent_warnings, hypotheses = (
+        evidence, candidates, questions, events, pathways, agent_warnings, hypotheses, meta = (
             [],
             [],
             [],
@@ -102,6 +102,7 @@ def run_research(
             [],
             ["Research provider failed; retry later."],
             [],
+            ResearchRunMeta(hypothesis_outcomes=[], extraction_diagnostics=[]),
         )
     finally:
         if serp is None:
@@ -110,9 +111,14 @@ def run_research(
         candidate.verification_status not in {"hypothesis", "unverified"}
         for candidate in candidates
     )
+    blocking_agent_warnings = [
+        warning
+        for warning in agent_warnings
+        if not warning.startswith("Gemini extraction failed twice")
+    ]
     status = (
         "completed"
-        if evidence and grounded and not agent_warnings
+        if evidence and grounded and not blocking_agent_warnings
         else "partial"
         if evidence
         else "failed"
@@ -131,6 +137,8 @@ def run_research(
         research_events=events,
         evidence=evidence,
         candidate_actions=candidates,
+        hypothesis_outcomes=meta.hypothesis_outcomes,
+        extraction_diagnostics=meta.extraction_diagnostics,
         clarifying_questions=questions,
         initial_question_ids=[question.id for question in questions[:2]],
         tool_calls_used=serp_client.calls,

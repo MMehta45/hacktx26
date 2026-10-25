@@ -254,3 +254,33 @@ after 08:00 proves only that the returned itinerary misses the checked shift. It
 "potentially feasible with adjustment" rather than universal infeasibility; an earlier
 departure, alternative itinerary, return leg, or manager-approved schedule change still
 requires evidence.
+
+## M3.4 — Reliable extraction and complete candidate preservation
+
+### Constrain Gemini output and retain stop diagnostics
+
+The prior extractor requested only the JSON MIME type, duplicated a large hand-written
+shape in the prompt, capped output at 4,000 tokens, discarded `finish_reason`, and called
+`json.loads` once. The observed warning therefore identifies a JSON syntax failure—not a
+Pydantic rejection—but the discarded response metadata makes the historical run's exact
+stop cause unrecoverable. M3.4 uses Gemini's JSON Schema structured-output setting with
+the `ResearchExtraction` Pydantic schema, removes the duplicate prompt schema, raises the
+bounded output allowance to 7,000 tokens, and validates with `model_validate_json`.
+
+One retry receives only a sanitized validation summary. Each failed attempt records a
+safe error code, field location/message, finish reason, and output-token count where the
+provider supplies them. Raw model text and credentials are never returned by the API.
+
+### Preserve conservative candidates before model extraction
+
+Provider evidence is now converted to conservative typed candidates before final Gemini
+extraction. Ask-user hypotheses retain unknown requirements; transit retains deterministic
+route status; each repair listing/review remains a separate estimate request; and web
+resources retain conditional verification requirements. Gemini can add richer distinct
+candidates, but malformed output cannot delete the deterministic set.
+
+Candidates carry stable `hypothesis_ids`. Every hypothesis returns one structured outcome:
+viable candidate, conditional candidate, blocked, rejected with a reason, or insufficient
+evidence. Exact semantic duplicates are merged by mechanism/title while their evidence
+and hypothesis links are unioned. Repeated extraction failure keeps a completed research
+status when evidence-grounded candidates survived, with warnings and diagnostics attached.

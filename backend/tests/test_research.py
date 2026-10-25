@@ -7,7 +7,13 @@ from pydantic import ValidationError
 
 from app.config import Settings
 from app.main import app
-from app.research_agent import _ground_transport_candidate, research_with_agent
+from app.research_agent import (
+    GeminiExtractionResponse,
+    LiveGemini,
+    _extract_with_retry,
+    _ground_transport_candidate,
+    research_with_agent,
+)
 from app.research_graph import rank_targets
 from app.research_models import (
     CandidateAction,
@@ -27,6 +33,47 @@ def crisis():
         example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
         default_request(),
         actions=[],
+    )
+
+
+def extraction_json(candidate_id: str = "candidate-valid") -> str:
+    return __import__("json").dumps(
+        {
+            "candidate_actions": [
+                {
+                    "id": candidate_id,
+                    "title": "Ask about a rent extension",
+                    "mechanism": "bill_flexibility",
+                    "addresses_node_ids": ["bills_unpaid"],
+                    "description": "Requires landlord confirmation.",
+                    "requirements": [
+                        {
+                            "key": "landlord_approval",
+                            "status": "unknown",
+                            "description": "Approval is unknown.",
+                        }
+                    ],
+                    "cost": {"status": "unknown", "basis": "No fee terms were returned."},
+                    "hypothesis_ids": ["rent_extension"],
+                    "verification_status": "hypothesis",
+                }
+            ],
+            "clarifying_questions": [
+                {
+                    "id": "question-rent-extension",
+                    "question": "Would your landlord approve a short extension?",
+                    "addresses_node_ids": ["bills_unpaid"],
+                    "related_candidate_ids": [candidate_id],
+                    "resolves_requirement_keys": ["landlord_approval"],
+                    "decision_impact": 3,
+                    "uncertainty": 3,
+                    "top_candidate_relevance": 3,
+                    "priority_score": 27,
+                    "reason": "Approval determines feasibility.",
+                    "answer_type": "yes_no",
+                }
+            ],
+        }
     )
 
 
@@ -217,7 +264,12 @@ def test_serp_fare_observed_only_when_returned() -> None:
 def test_missing_key_and_fingerprint_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     from app import research_service
 
-    monkeypatch.setattr(research_service, "get_snapshot", lambda **kwargs: example_snapshot())
+    research_service._research_cache.clear()
+    monkeypatch.setattr(
+        research_service,
+        "get_snapshot",
+        lambda **kwargs: example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
+    )
     settings = Settings(_env_file=None, gemini_api_key=None, serpapi_api_key=None)
     first = run_research(ResearchRequest(scenario=default_request()), settings)
     second = run_research(
@@ -323,12 +375,14 @@ def test_agent_chains_searches_and_keeps_employer_permission_unknown() -> None:
     serp = SerpResearch("fake", client=httpx.Client(transport=httpx.MockTransport(fake)))
     from app.research_models import ResearchContext
 
-    evidence, candidates, questions, events, pathways, warnings, hypotheses = research_with_agent(
-        simulation=crisis(),
-        context=ResearchContext(),
-        targets=rank_targets(crisis())[0],
-        gemini=FakeGemini(),
-        serp=serp,
+    evidence, candidates, questions, events, pathways, warnings, hypotheses, _ = (
+        research_with_agent(
+            simulation=crisis(),
+            context=ResearchContext(),
+            targets=rank_targets(crisis())[0],
+            gemini=FakeGemini(),
+            serp=serp,
+        )
     )
     assert engines == ["google_maps_directions", "google_maps_directions", "google", "google_maps"]
     assert len(evidence) == 4 and len(candidates) >= 2 and len(questions) >= 1
@@ -418,7 +472,7 @@ def test_failed_transit_path_does_not_suppress_repair_or_bill_paths() -> None:
             },
         )
 
-    *_, pathways, warnings, _ = research_with_agent(
+    _, _, _, _, pathways, warnings, _, _ = research_with_agent(
         simulation=crisis(),
         context=__import__("app.research_models", fromlist=["ResearchContext"]).ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -499,11 +553,11 @@ def test_rating_alone_does_not_make_mechanic_affordable() -> None:
     mechanic = next(
         candidate for candidate in candidates if candidate.mechanism == "repair_affordability"
     )
-    assert mechanic.title == "Request an estimate from Highly Rated Auto"
+    assert mechanic.title == "Request a written estimate from Highly Rated Auto"
     assert mechanic.cost.amount_cents is None and mechanic.cost.status == "unknown"
     assert mechanic.verification_status == "conditional"
     assert any(
-        requirement.key == "written_repair_estimate" for requirement in mechanic.requirements
+        requirement.key.startswith("written_estimate") for requirement in mechanic.requirements
     )
 
 
@@ -592,7 +646,7 @@ def test_remote_work_is_seeded_but_never_assumed_approved() -> None:
         def extract(self, trace):
             return '{"candidate_actions":[],"clarifying_questions":[]}'
 
-    _, candidates, questions, _, pathways, _, hypotheses = research_with_agent(
+    _, candidates, questions, _, pathways, _, hypotheses, _ = research_with_agent(
         simulation=crisis(),
         context=__import__("app.research_models", fromlist=["ResearchContext"]).ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -640,7 +694,7 @@ def test_gemini_can_add_a_hypothesis_outside_baseline_paths() -> None:
         def extract(self, trace):
             return '{"candidate_actions":[],"clarifying_questions":[]}'
 
-    *_, pathways, _, hypotheses = research_with_agent(
+    _, candidates, questions, _, pathways, _, hypotheses, meta = research_with_agent(
         simulation=crisis(),
         context=__import__("app.research_models", fromlist=["ResearchContext"]).ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -654,6 +708,13 @@ def test_gemini_can_add_a_hypothesis_outside_baseline_paths() -> None:
     )
     assert any(item.id == "borrow_vehicle" and item.origin == "gemini" for item in hypotheses)
     assert any(item.id == "borrow_vehicle" for item in pathways)
+    borrow = next(item for item in candidates if "borrow_vehicle" in item.hypothesis_ids)
+    assert borrow.verification_status == "hypothesis"
+    assert any(borrow.id in item.related_candidate_ids for item in questions)
+    outcome = next(
+        item for item in meta.hypothesis_outcomes if item.hypothesis_id == "borrow_vehicle"
+    )
+    assert outcome.status == "conditional_candidate" and borrow.id in outcome.candidate_ids
 
 
 def test_transit_time_uses_central_offset() -> None:
@@ -756,7 +817,7 @@ def test_late_transit_evidence_creates_shift_adjustment_hypothesis() -> None:
             },
         )
 
-    *_, pathways, _, hypotheses = research_with_agent(
+    _, _, _, _, pathways, _, hypotheses, _ = research_with_agent(
         simulation=crisis(),
         context=__import__("app.research_models", fromlist=["ResearchContext"]).ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -801,7 +862,7 @@ def test_agent_enforces_six_searches_despite_many_tool_calls() -> None:
     )
     from app.research_models import ResearchContext
 
-    _, candidates, _, _, pathways, warnings, _ = research_with_agent(
+    _, candidates, _, _, pathways, warnings, _, _ = research_with_agent(
         simulation=crisis(),
         context=ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -846,7 +907,7 @@ def test_malformed_gemini_output_does_not_create_candidates() -> None:
     )
     from app.research_models import ResearchContext
 
-    evidence, candidates, questions, _, _, warnings, _ = research_with_agent(
+    evidence, candidates, questions, _, _, warnings, hypotheses, meta = research_with_agent(
         simulation=crisis(),
         context=ResearchContext(),
         targets=rank_targets(crisis())[0],
@@ -854,9 +915,339 @@ def test_malformed_gemini_output_does_not_create_candidates() -> None:
         serp=provider,
     )
     assert evidence
-    assert [candidate.id for candidate in candidates] == ["candidate-remote-work"]
-    assert [question.id for question in questions] == ["question-remote-work"]
-    assert any("malformed research JSON" in item for item in warnings)
+    assert any(candidate.id == "candidate-remote-work" for candidate in candidates)
+    assert any(candidate.evidence_ids for candidate in candidates)
+    assert any(question.id == "question-remote-work" for question in questions)
+    assert any("failed twice" in item for item in warnings)
+    assert len(meta.extraction_diagnostics) == 2
+    assert all(item.code == "malformed_json" for item in meta.extraction_diagnostics)
+    assert all(not item.recovered for item in meta.extraction_diagnostics)
+    assert {item.hypothesis_id for item in meta.hypothesis_outcomes} == {
+        item.id for item in hypotheses
+    }
+    evidence_ids = {item.id for item in evidence}
+    candidate_ids = {item.id for item in candidates}
+    assert all(set(item.evidence_ids) <= evidence_ids for item in candidates)
+    assert all(item.cost.amount_cents is None for item in candidates)
+    assert all(set(item.related_candidate_ids) <= candidate_ids for item in questions)
+
+
+def test_valid_structured_extraction_is_pydantic_validated() -> None:
+    class ValidGemini:
+        def extract(self, trace, *, correction=None):
+            assert correction is None
+            return GeminiExtractionResponse(
+                text=extraction_json(), finish_reason="STOP", output_tokens=240
+            )
+
+    extraction, diagnostics = _extract_with_retry(ValidGemini(), [{"evidence": []}])
+    assert extraction is not None
+    assert extraction.candidate_actions[0].id == "candidate-valid"
+    assert extraction.clarifying_questions[0].related_candidate_ids == ["candidate-valid"]
+    assert diagnostics == []
+
+
+def test_live_gemini_requests_schema_and_records_finish_metadata() -> None:
+    from types import SimpleNamespace
+
+    captured = {}
+
+    class Models:
+        def generate_content(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(
+                text=extraction_json(),
+                candidates=[SimpleNamespace(finish_reason="STOP", finish_message=None)],
+                usage_metadata=SimpleNamespace(candidates_token_count=321),
+            )
+
+    live = LiveGemini.__new__(LiveGemini)
+    live.client = SimpleNamespace(models=Models())
+    live.model = "test-model"
+    response = live.extract([{"evidence": []}])
+    config = captured["config"]
+    assert config.response_mime_type == "application/json"
+    assert config.response_json_schema["properties"]["candidate_actions"]
+    assert config.max_output_tokens == 7000
+    assert response.finish_reason == "STOP" and response.output_tokens == 321
+
+
+def test_structured_extraction_preserves_multiple_distinct_same_category_candidates() -> None:
+    payload = __import__("json").loads(extraction_json("candidate-rent-extension"))
+    second = dict(payload["candidate_actions"][0])
+    second.update(
+        {
+            "id": "candidate-utility-extension",
+            "title": "Ask about a utility payment extension",
+        }
+    )
+    payload["candidate_actions"].append(second)
+
+    class MultiGemini:
+        def extract(self, trace, *, correction=None):
+            return __import__("json").dumps(payload)
+
+    extraction, diagnostics = _extract_with_retry(MultiGemini(), [])
+    assert extraction is not None and not diagnostics
+    assert [item.id for item in extraction.candidate_actions] == [
+        "candidate-rent-extension",
+        "candidate-utility-extension",
+    ]
+
+
+def test_truncated_extraction_retries_once_and_recovers() -> None:
+    class RetryGemini:
+        def __init__(self):
+            self.calls = 0
+
+        def extract(self, trace, *, correction=None):
+            self.calls += 1
+            if self.calls == 1:
+                return GeminiExtractionResponse(
+                    text='{"candidate_actions":[',
+                    finish_reason="MAX_TOKENS",
+                    output_tokens=7000,
+                )
+            assert correction and "complete JSON" in correction
+            return GeminiExtractionResponse(text=extraction_json(), finish_reason="STOP")
+
+    gemini = RetryGemini()
+    extraction, diagnostics = _extract_with_retry(gemini, [{"evidence": []}])
+    assert extraction is not None and gemini.calls == 2
+    assert len(diagnostics) == 1
+    assert diagnostics[0].code == "truncated" and diagnostics[0].recovered
+    assert diagnostics[0].finish_reason == "MAX_TOKENS"
+
+
+def test_schema_error_then_malformed_retry_preserves_diagnostics() -> None:
+    class BrokenGemini:
+        def __init__(self):
+            self.calls = 0
+
+        def extract(self, trace, *, correction=None):
+            self.calls += 1
+            if self.calls == 1:
+                payload = __import__("json").loads(extraction_json())
+                payload["candidate_actions"][0]["cost"] = {
+                    "status": "observed",
+                    "amount_cents": None,
+                    "basis": "invented",
+                }
+                return __import__("json").dumps(payload)
+            assert correction and "value_error" in correction
+            return "still not json"
+
+    extraction, diagnostics = _extract_with_retry(BrokenGemini(), [{"evidence": []}])
+    assert extraction is None
+    assert [item.code for item in diagnostics] == ["schema_validation", "malformed_json"]
+    assert all(not item.recovered for item in diagnostics)
+
+
+def test_eight_hypothesis_fixture_preserves_nine_candidates_after_extraction_failure() -> None:
+    class EightHypothesisGemini:
+        def propose(self, context):
+            rows = [
+                (
+                    "rent_extension",
+                    "Ask for a rent extension",
+                    "bill_flexibility",
+                    "ask_user",
+                    None,
+                    27,
+                ),
+                (
+                    "insurance_extension",
+                    "Ask for an insurance payment extension",
+                    "bill_flexibility",
+                    "ask_user",
+                    None,
+                    18,
+                ),
+                (
+                    "borrow_vehicle",
+                    "Borrow a vehicle from someone Maya trusts",
+                    "transportation",
+                    "ask_user",
+                    None,
+                    18,
+                ),
+                (
+                    "local_aid",
+                    "Check another local emergency aid source",
+                    "assistance",
+                    "public_research",
+                    "search_web",
+                    8,
+                ),
+            ]
+            return __import__("json").dumps(
+                {
+                    "hypotheses": [
+                        {
+                            "id": item_id,
+                            "title": title,
+                            "mechanism": mechanism,
+                            "target_node_ids": ["bills_unpaid"]
+                            if mechanism in {"bill_flexibility", "assistance"}
+                            else ["commute_disrupted", "missed_work"],
+                            "impact": 3 if score in {27, 18} else 2,
+                            "urgency": 3 if score in {27, 18} else 2,
+                            "actionability": 3 if score == 27 else 2,
+                            "priority_score": score,
+                            "evidence_need": f"Confirm feasibility of {title.casefold()}.",
+                            "investigation_mode": mode,
+                            **({"suggested_tool": tool, "suggested_query": title} if tool else {}),
+                        }
+                        for item_id, title, mechanism, mode, tool, score in rows
+                    ]
+                }
+            )
+
+        def turn(self, trace, *, tools):
+            pathway = trace[-1]["active_pathway"]
+            if pathway == "transportation":
+                return [("find_transit", {"origin": "home", "destination": "work"})], None
+            if pathway == "repair_affordability":
+                return [("search_places", {"query": "independent mechanic"})], None
+            return [("search_web", {"query": f"official {pathway}"})], None
+
+        def extract(self, trace, *, correction=None):
+            return '{"candidate_actions":['
+
+    def fake(request: httpx.Request) -> httpx.Response:
+        engine = request.url.params["engine"]
+        if engine == "google_maps_directions":
+            outbound = request.url.params["start_addr"].startswith("3810")
+            return httpx.Response(
+                200,
+                json={
+                    "search_metadata": {
+                        "google_maps_directions_url": "https://maps.google.com/route"
+                    },
+                    "directions": [
+                        {
+                            "travel_mode": "Transit",
+                            "start_time": "7:10 AM" if outbound else "4:10 PM",
+                            "end_time": "7:45 AM" if outbound else "4:45 PM",
+                        }
+                    ],
+                },
+            )
+        if engine == "google_maps":
+            return httpx.Response(
+                200,
+                json={
+                    "local_results": [
+                        {
+                            "title": "Alpha Auto",
+                            "website": "https://alpha.example",
+                            "data_id": "alpha",
+                            "rating": 4.8,
+                        },
+                        {
+                            "title": "Beta Auto",
+                            "website": "https://beta.example",
+                            "data_id": "beta",
+                            "rating": 4.6,
+                        },
+                    ]
+                },
+            )
+        if engine == "google_maps_reviews":
+            return httpx.Response(
+                200,
+                json={
+                    "search_metadata": {
+                        "google_maps_reviews_url": "https://google.com/maps/reviews"
+                    },
+                    "reviews": [
+                        {"snippet": "The estimate was transparent and the price was fair."}
+                    ],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "organic_results": [
+                    {"title": request.url.params["q"], "link": "https://austintexas.gov/help"}
+                ]
+            },
+        )
+
+    evidence, candidates, questions, _, pathways, warnings, hypotheses, meta = research_with_agent(
+        simulation=crisis(),
+        context=__import__("app.research_models", fromlist=["ResearchContext"]).ResearchContext(),
+        targets=rank_targets(crisis())[0],
+        gemini=EightHypothesisGemini(),
+        serp=SerpResearch(
+            "fake", max_calls=6, client=httpx.Client(transport=httpx.MockTransport(fake))
+        ),
+    )
+    assert len(hypotheses) == 8 and sum(item.tool_calls_used for item in pathways) == 6
+    assert len(candidates) == 9
+    assert len({item.id for item in candidates}) == 9
+    assert len(meta.hypothesis_outcomes) == 8
+    assert all(
+        item.status in {"conditional_candidate", "viable_candidate"}
+        for item in meta.hypothesis_outcomes
+    )
+    assert len(meta.extraction_diagnostics) == 2
+    assert evidence and any(item.provider_engine == "google_maps_reviews" for item in evidence)
+    assert any("failed twice" in item for item in warnings)
+    candidate_ids = {item.id for item in candidates}
+    assert questions and all(set(item.related_candidate_ids) <= candidate_ids for item in questions)
+    assert all(item.cost.amount_cents is None for item in candidates)
+
+
+def test_repeated_extraction_failure_keeps_completed_research_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import research_service
+
+    research_service._research_cache.clear()
+    monkeypatch.setattr(
+        research_service,
+        "get_snapshot",
+        lambda **kwargs: example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
+    )
+
+    class MalformedGemini:
+        def turn(self, trace, *, tools):
+            pathway = trace[-1]["active_pathway"]
+            if pathway == "transportation":
+                return [], "skip"
+            if pathway == "repair_affordability":
+                return [], "skip"
+            return [("search_web", {"query": "official assistance"})], None
+
+        def extract(self, trace, *, correction=None):
+            return '{"candidate_actions":['
+
+    provider = SerpResearch(
+        "fake",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "organic_results": [
+                            {"title": "Official help", "link": "https://austintexas.gov/help"}
+                        ]
+                    },
+                )
+            )
+        ),
+    )
+    result = run_research(
+        ResearchRequest(scenario=default_request(), force_refresh=True),
+        Settings(_env_file=None, gemini_api_key="fake", serpapi_api_key="fake"),
+        gemini=MalformedGemini(),
+        serp=provider,
+    ).research
+    assert result.status == "completed"
+    assert result.evidence and result.candidate_actions
+    assert len(result.extraction_diagnostics) == 2
+    assert len(result.hypothesis_outcomes) == len(result.hypotheses)
 
 
 def test_same_scenario_reuses_research_and_changed_wage_invalidates(
@@ -864,6 +1255,7 @@ def test_same_scenario_reuses_research_and_changed_wage_invalidates(
 ) -> None:
     from app import research_service
 
+    research_service._research_cache.clear()
     monkeypatch.setattr(research_service, "get_snapshot", lambda **kwargs: example_snapshot())
 
     class FakeGemini:
