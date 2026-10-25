@@ -288,6 +288,162 @@ def test_recovery_api_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     body = response.json()
     assert body["schema_version"] == 1
     assert body["evaluation"]["plans"]
+    assert TestClient(app).get("/api/recovery/sessions/stale-session").status_code == 404
+
+
+def test_explore_result_to_answer_and_recovery_evaluation_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import recovery_service
+
+    _sessions.clear()
+    monkeypatch.setattr(
+        recovery_service,
+        "get_snapshot",
+        lambda **kwargs: example_snapshot(bills=upcoming_bills(date(2026, 10, 24))),
+    )
+    client = TestClient(app)
+    created = client.post(
+        "/api/recovery/sessions",
+        json={
+            "scenario": default_request(forecast_horizon_days=30).model_dump(mode="json"),
+            "research": {
+                "status": "completed",
+                "run_id": "explore-run",
+                "simulation_fingerprint": "explore-fingerprint",
+                "research_started_at": "2026-10-25T12:00:00Z",
+                "research_finished_at": "2026-10-25T12:00:01Z",
+                "priority_targets": [],
+                "research_events": [],
+                "evidence": [],
+                "candidate_actions": [],
+                "tool_calls_used": 0,
+                "cache_hits": 0,
+            },
+        },
+    )
+    assert created.status_code == 200
+    session = created.json()
+    answered = client.post(
+        f"/api/recovery/sessions/{session['id']}/answers",
+        json={
+            "session_version": session["version"],
+            "question_id": "question-remote-possible",
+            "value": True,
+        },
+    )
+    assert answered.status_code == 200
+    updated = answered.json()
+    assert next(
+        item for item in updated["requirements"] if item["id"] == "remote_manager_approval"
+    )["status"] == "pending_external_approval"
+    evaluated = client.post(
+        f"/api/recovery/sessions/{session['id']}/evaluate",
+        json={"session_version": updated["version"]},
+    )
+    assert evaluated.status_code == 200
+    assert evaluated.json()["evaluation"]["plans"]
+
+
+def test_recovery_accepts_build03_route_name_and_preserves_transit_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explore's legacy route_name spelling must survive the M4 session boundary."""
+    from app import recovery_service
+
+    _sessions.clear()
+    monkeypatch.setattr(
+        recovery_service,
+        "get_snapshot",
+        lambda **kwargs: example_snapshot(bills=upcoming_bills(date(2026, 10, 24))),
+    )
+    client = TestClient(app)
+    research = {
+        "status": "completed",
+        "run_id": "build03-transit",
+        "simulation_fingerprint": "fixture-fingerprint",
+        "research_started_at": "2026-10-25T12:00:00Z",
+        "research_finished_at": "2026-10-25T12:00:01Z",
+        "priority_targets": [],
+        "research_events": [],
+        "candidate_actions": [],
+        "tool_calls_used": 2,
+        "cache_hits": 0,
+        "evidence": [
+            {
+                "id": "transit-realistic",
+                "source_type": "transit_directions",
+                "provider_engine": "google_maps_directions",
+                "title": "Timed bus itinerary",
+                "url": "https://www.google.com/maps/dir/?api=1",
+                "query": "home to work",
+                "retrieved_at": "2026-10-25T12:00:00Z",
+                "facts_supported": ["route and timing"],
+                "limitations": ["availability can change"],
+                "observed_cost_cents": 125,
+                "transit_departure": "2026-10-26T07:10:00-05:00",
+                "transit_arrival": "2026-10-26T07:48:00-05:00",
+                "transit_request_kind": "arrive_by",
+                "transit_request_date": "2026-10-26",
+                "route_numbers": ["5", "801"],
+                "transfer_count": 1,
+                "walking_duration_minutes": 8,
+                "transit_duration_minutes": 38,
+                "fare_source": "provider observed",
+                "fare_certainty": "provider_observed",
+                "transit_legs": [
+                    {
+                        "mode": "walking",
+                        "route_name": None,
+                        "departure": "2026-10-26T07:00:00-05:00",
+                        "arrival": "2026-10-26T07:08:00-05:00",
+                        "duration_minutes": 8,
+                        "distance_meters": 600,
+                        "boarding_stop": "Home",
+                        "alighting_stop": "North Lamar",
+                    },
+                    {
+                        "mode": "transit",
+                        "route_name": "5 Northcross",
+                        "departure": "2026-10-26T07:10:00-05:00",
+                        "arrival": "2026-10-26T07:30:00-05:00",
+                        "duration_minutes": 20,
+                        "distance_meters": 5000,
+                        "boarding_stop": "North Lamar",
+                        "alighting_stop": "Tech Center",
+                    },
+                    {
+                        "mode": "transit",
+                        "route": "801 Downtown",
+                        "departure": "2026-10-26T07:32:00-05:00",
+                        "arrival": "2026-10-26T07:42:00-05:00",
+                        "duration_minutes": 10,
+                        "distance_meters": 3000,
+                        "boarding_stop": "Tech Center",
+                        "alighting_stop": "Work",
+                    },
+                ],
+            }
+        ],
+    }
+    created = client.post(
+        "/api/recovery/sessions",
+        json={"scenario": default_request(forecast_horizon_days=30).model_dump(mode="json"), "research": research},
+    )
+    assert created.status_code == 200, created.text
+    evidence = created.json()["evidence"][0]
+    assert [leg["route"] for leg in evidence["transit_legs"]] == [None, "5 Northcross", "801 Downtown"]
+    session = created.json()
+    answered = client.post(
+        f"/api/recovery/sessions/{session['id']}/answers",
+        json={"session_version": session["version"], "question_id": "question-remote-possible", "value": True},
+    )
+    assert answered.status_code == 200, answered.text
+    evaluated = client.post(
+        f"/api/recovery/sessions/{session['id']}/evaluate",
+        json={"session_version": answered.json()["version"]},
+    )
+    assert evaluated.status_code == 200, evaluated.text
 
 
 def test_targeted_transit_research_preserves_answers_and_adds_quantified_routes(
@@ -339,7 +495,11 @@ def test_targeted_transit_research_preserves_answers_and_adds_quantified_routes(
                     transit_arrival=__import__("datetime").datetime.fromisoformat(f"{day}T07:45:00-05:00") if arrive else __import__("datetime").datetime.fromisoformat(f"{day}T17:00:00-05:00"),
                     transit_departure=__import__("datetime").datetime.fromisoformat(f"{day}T07:00:00-05:00") if arrive else __import__("datetime").datetime.fromisoformat(f"{day}T16:05:00-05:00"),
                     route_numbers=["7"],
-                    fare_certainty="observed",
+                    transit_origin_matches=True,
+                    transit_destination_matches=True,
+                    transit_time_constraint_honored=True,
+                    fare_source="Mock provider fare",
+                    fare_certainty="provider_observed",
                 )
             ]
 

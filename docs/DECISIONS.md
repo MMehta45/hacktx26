@@ -360,3 +360,39 @@ Recovery sessions may spend a small per-round SerpApi budget within a larger ses
 Identical targeted queries are cached, provider failures preserve existing evidence and
 answers, and unquantified research leads never enter plan arithmetic. Session storage is
 in-memory for the prototype; the browser retains only an opaque session ID.
+
+## M4.1 — Recovery and provider-data corrections
+
+### Advertise backend capabilities and classify recovery failures
+
+The recovery 404 came from stale running processes, not the checked-in FastAPI router.
+Health now advertises API version 0.4.1 and recovery capabilities. The Next.js proxy maps a
+missing saved session to `RECOVERY_SESSION_NOT_FOUND`, a missing recovery router to
+`RECOVERY_ROUTE_MISSING`, payload validation to `RECOVERY_PAYLOAD_INVALID`, and connection
+failure to `RECOVERY_BACKEND_UNAVAILABLE`. The browser recreates only a genuinely stale
+session; it no longer hides backend or route failures by clearing state indiscriminately.
+
+### Distrust a provider itinerary that ignores its requested time
+
+SerpApi accepted and echoed the documented `arrive_by:<unix timestamp>` parameter during a
+live check but returned current-time routes at 12:20 and 21:34 for an 08:00–16:00 shift.
+Each itinerary now records whether the returned time is plausibly tied to the requested
+constraint, and whether provider-resolved endpoints match the requested commute. Only
+matched, time-honoring, same-date outbound/return evidence with known fares can compile to
+a shift-preserving financial action.
+
+### Treat documented duration numbers as seconds
+
+SerpApi documents `directions[].duration` and `trips[].duration` as seconds. Numeric values
+are now converted with ceiling-to-minutes; strings remain parsed as formatted durations.
+Transit stop times come from nested `start_stop.time` and `end_stop.time`. Missing overall
+duration falls back to the valid start/end interval.
+
+### Require linked positive pricing evidence everywhere
+
+Generic mechanic listings remain raw evidence but no longer become affordability candidates.
+Both deterministic and Gemini candidates must cite a place plus a review linked to that
+same place containing non-negated positive price language. Negative-only, missing-review,
+or rating-only shops are suppressed in research, recovery conversion, and frontend display.
+Qualified shops request an alternative quote against Maya's existing $400 quote; reviews
+never create a lower repair amount.

@@ -1,3 +1,5 @@
+import type { ResearchResult } from "@/types/research";
+
 export const AUSTIN_DEMO_CONTEXT = {
   city: "Austin, TX",
   timezone: "America/Chicago",
@@ -15,6 +17,27 @@ export type RouteContext = {
   shiftStart: string;
   shiftEnd: string;
 };
+
+export function filterUnsupportedMechanicRecommendations(result: ResearchResult): ResearchResult {
+  const evidence = new Map(result.evidence.map((item) => [item.id, item]));
+  return {
+    ...result,
+    evidence: result.evidence.map((item) => ({
+      ...item,
+      transit_legs: item.transit_legs?.map((leg) => ({ ...leg, route_name: leg.route })),
+    })),
+    candidate_actions: result.candidate_actions.filter((candidate) => {
+      if (candidate.mechanism !== "repair_affordability") return true;
+      const cited = candidate.evidence_ids.map((id) => evidence.get(id)).filter(Boolean);
+      const placeIds = new Set(cited.filter((item) => item?.source_type === "place").map((item) => item?.id));
+      return cited.some(
+        (item) => item?.source_type === "place_review"
+          && (item.positive_price_review_snippets?.length ?? 0) > 0
+          && Boolean(item.parent_place_evidence_id && placeIds.has(item.parent_place_evidence_id)),
+      );
+    }),
+  };
+}
 
 export function researchRequestBody(
   scenario: {

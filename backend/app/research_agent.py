@@ -567,35 +567,43 @@ def _transit_calls(
 
 def _ground_repair_candidate(
     candidate: CandidateAction, evidence_by_id: dict[str, Evidence]
-) -> CandidateAction:
+) -> CandidateAction | None:
     if candidate.mechanism != "repair_affordability":
         return candidate
     sources = [evidence_by_id[source] for source in candidate.evidence_ids]
-    if any(source.positive_price_review_snippets for source in sources):
-        return candidate
+    place_ids = {source.id for source in sources if source.source_type == "place"}
+    qualifying_reviews = [
+        source
+        for source in sources
+        if source.source_type == "place_review"
+        and source.positive_price_review_snippets
+        and source.parent_place_evidence_id in place_ids
+    ]
+    if not qualifying_reviews:
+        return None
     requirements = list(candidate.requirements)
-    if not any(requirement.key == "written_repair_estimate" for requirement in requirements):
+    if not any("alternative" in requirement.key and "quote" in requirement.key for requirement in requirements):
         requirements.append(
             Requirement(
-                key="written_repair_estimate",
+                key="alternative_repair_quote",
                 status="unknown",
-                description="A written estimate is needed; rating alone does not establish affordability.",
+                description="Request an alternative written quote to compare with Maya's existing $400 quote.",
                 verification_source_ids=[],
             )
         )
-    unknowns = list(dict.fromkeys([*candidate.remaining_unknowns, "actual repair price"]))
-    source_name = sources[0].title if sources else "this repair shop"
     return candidate.model_copy(
         update={
-            "title": f"Request an estimate from {source_name}",
+            "title": candidate.title.replace("written estimate", "alternative quote"),
             "cost": CandidateCost(
                 amount_cents=None,
                 currency="USD",
                 status="unknown",
-                basis="No source-backed price for Maya's unknown repair.",
+                basis="Positive pricing reviews support comparison shopping, not a lower quote.",
             ),
             "requirements": requirements,
-            "remaining_unknowns": unknowns,
+            "remaining_unknowns": list(
+                dict.fromkeys([*candidate.remaining_unknowns, "alternative written quote"])
+            ),
             "verification_status": "conditional",
         }
     )
@@ -730,7 +738,7 @@ def _mechanic_shortlist(evidence: list[Evidence]) -> list[CandidateAction]:
         output.append(
             CandidateAction(
                 id=f"candidate-mechanic-{shop_slug}",
-                title=f"Request a written estimate from {place.title}",
+                title=f"Request an alternative quote from {place.title}",
                 mechanism="repair_affordability",
                 addresses_node_ids=["car_unavailable", "unexpected_repair_expense"],
                 description=f"Shortlisted for contact using listing reputation and review evidence. {price_summary} This does not establish the actual repair price or that this shop is cheapest.",
@@ -738,7 +746,7 @@ def _mechanic_shortlist(evidence: list[Evidence]) -> list[CandidateAction]:
                     Requirement(
                         key=f"written_estimate_{shop_slug}",
                         status="unknown",
-                        description="Obtain a written estimate for the still-unknown repair.",
+                        description="Obtain an alternative written quote to compare with Maya's existing $400 quote.",
                     ),
                     Requirement(
                         key=f"shop_access_{shop_slug}",
@@ -845,32 +853,8 @@ def _preserve_hypothesis_candidates(
         if not evidence_ids:
             continue
         if hypothesis.mechanism == "repair_affordability":
-            for place in [
-                evidence_by_id[source]
-                for source in evidence_ids
-                if evidence_by_id[source].source_type == "place"
-            ][:3]:
-                candidate = CandidateAction(
-                    id=f"candidate-{slug}-{_stable_slug(place.id)}",
-                    title=f"Request a written estimate from {place.title}",
-                    mechanism="repair_affordability",
-                    addresses_node_ids=hypothesis.target_node_ids,
-                    description="The provider listing supports contacting this shop, but does not establish price, diagnosis, availability, or that it is cheapest.",
-                    requirements=[
-                        Requirement(
-                            key=f"written_estimate_{_stable_slug(place.id)}",
-                            status="unknown",
-                            description="Obtain a written estimate for Maya's actual repair.",
-                        )
-                    ],
-                    cost=CandidateCost(status="unknown", basis="No repair quote was returned."),
-                    evidence_ids=[place.id],
-                    hypothesis_ids=[hypothesis.id],
-                    verification_status="conditional",
-                    remaining_unknowns=["vehicle diagnosis", "written estimate", "availability"],
-                    confidence_explanation="A real listing was found; affordability remains unknown without review evidence and an estimate.",
-                )
-                candidates.append(candidate)
+            # Listings stay in evidence, but only the review-backed shortlist below may
+            # become an affordability candidate. Maya already has a $400 quote.
             continue
         candidate = CandidateAction(
             id=f"candidate-{slug}",
@@ -1468,6 +1452,13 @@ def research_with_agent(
                     evidence_by_id=evidence_by_id,
                 )
                 candidate = _ground_repair_candidate(candidate, evidence_by_id)
+                if candidate is None:
+                    _event(
+                        events,
+                        "candidate_extracted",
+                        "Suppressed an affordability candidate without linked positive pricing-review evidence.",
+                    )
+                    continue
                 candidate_id_map[original_candidate_id] = _merge_candidate(candidates, candidate)
                 _event(
                     events, "candidate_extracted", f"Validated potential action: {candidate.title}."

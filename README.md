@@ -261,10 +261,14 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
 - **Port already in use:** use the alternate-port commands above.
 - **Frontend cannot reach FastAPI:** confirm `BACKEND_URL`, restart Next.js, and check the
   backend `/health` endpoint.
+- **Recovery says the route is missing:** inspect `/health` for `api_version: 0.4.1` and
+  `capabilities.recovery_sessions: true`. A different or stale process may own the configured
+  port. Stop only that old project process, restart FastAPI from this checkout, and make
+  `BACKEND_URL` point to it. A stale saved session is cleared automatically and recreated.
 - **`uv` is missing:** install it from the linked official instructions, then rerun
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M4.md](docs/progress/M4.md) for actual milestone verification. Real
+[docs/progress/M4.1.md](docs/progress/M4.1.md) for the latest recovery/transit reliability verification. Real
 provider calls are opt-in through Explore; ordinary automated tests use fake adapters
 and do not spend API quota.

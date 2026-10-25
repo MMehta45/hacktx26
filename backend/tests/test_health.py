@@ -10,5 +10,11 @@ def test_health_returns_success() -> None:
     assert response.json() == {
         "status": "ok",
         "service": "one-bad-tuesday-api",
+        "api_version": "0.4.1",
+        "capabilities": {
+            "research": True,
+            "recovery_sessions": True,
+            "targeted_research": True,
+        },
         "integrations": {"nessie": False, "serpapi": False, "gemini": False},
     }

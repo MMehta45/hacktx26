@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
@@ -12,11 +12,13 @@ from app.research_agent import (
     LiveGemini,
     _extract_with_retry,
     _ground_transport_candidate,
+    _mechanic_shortlist,
     research_with_agent,
 )
 from app.research_graph import rank_targets
 from app.research_models import (
     CandidateAction,
+    Evidence,
     PriorityTarget,
     ResearchRequest,
     clean_url,
@@ -550,14 +552,8 @@ def test_rating_alone_does_not_make_mechanic_affordable() -> None:
         gemini=FakeGemini(),
         serp=SerpResearch("fake", client=httpx.Client(transport=httpx.MockTransport(fake))),
     )
-    mechanic = next(
-        candidate for candidate in candidates if candidate.mechanism == "repair_affordability"
-    )
-    assert mechanic.title == "Request a written estimate from Highly Rated Auto"
-    assert mechanic.cost.amount_cents is None and mechanic.cost.status == "unknown"
-    assert mechanic.verification_status == "conditional"
-    assert any(
-        requirement.key.startswith("written_estimate") for requirement in mechanic.requirements
+    assert not any(
+        candidate.mechanism == "repair_affordability" for candidate in candidates
     )
 
 
@@ -629,6 +625,10 @@ def test_transit_directions_preserve_itinerary_times_fare_and_legs() -> None:
                 lambda request: httpx.Response(
                     200,
                     json={
+                        "places_info": [
+                            {"address": "3810 N Lamar Blvd, Austin, TX"},
+                            {"address": "525 N Lamar Blvd, Austin, TX"},
+                        ],
                         "directions": [
                             {
                                 "via": "7 and 803",
@@ -658,7 +658,7 @@ def test_transit_directions_preserve_itinerary_times_fare_and_legs() -> None:
         },
     )[0]
     assert route.observed_cost_cents == 250
-    assert route.fare_certainty == "observed"
+    assert route.fare_certainty == "provider_observed"
     assert route.transit_duration_minutes == 50
     assert route.walking_duration_minutes == 16
     assert route.route_numbers == ["Bus 7", "Rapid 803"]
@@ -684,6 +684,89 @@ def test_negated_affordable_review_is_not_positive_price_evidence() -> None:
     assert result.positive_price_review_snippets == []
     assert result.negative_price_review_snippets == ["This shop was not affordable for me."]
     assert result.price_evidence_score == 0
+
+
+def test_mechanic_shortlist_requires_linked_positive_price_evidence() -> None:
+    place = Evidence(
+        id="shop",
+        source_type="place",
+        provider_engine="google_maps",
+        title="Example Auto",
+        query="mechanic",
+        retrieved_at=datetime.now(UTC),
+    )
+    negative = Evidence(
+        id="negative-review",
+        source_type="place_review",
+        provider_engine="google_maps_reviews",
+        title="Reviews",
+        query="reviews",
+        retrieved_at=datetime.now(UTC),
+        parent_place_evidence_id=place.id,
+        negative_price_review_snippets=["Not affordable and too expensive."],
+    )
+    assert _mechanic_shortlist([place, negative]) == []
+
+    positive = negative.model_copy(
+        update={
+            "id": "positive-review",
+            "positive_price_review_snippets": ["The price was fair and the estimate transparent."],
+            "negative_price_review_snippets": [],
+            "affordability_confidence": "low",
+        }
+    )
+    candidates = _mechanic_shortlist([place, positive])
+    assert len(candidates) == 1
+    assert candidates[0].title == "Request an alternative quote from Example Auto"
+    assert candidates[0].cost.amount_cents is None
+    assert "$400" in candidates[0].requirements[0].description
+
+
+def test_numeric_transit_seconds_and_nested_stop_times_are_normalized() -> None:
+    provider = SerpResearch(
+        "fake",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "places_info": [
+                            {"address": request.url.params["start_addr"]},
+                            {"address": request.url.params["end_addr"]},
+                        ],
+                        "directions": [
+                            {
+                                "travel_mode": "Transit",
+                                "start_time": "7:20 AM",
+                                "end_time": "7:42 AM",
+                                "duration": 1320,
+                                "cost": 1.25,
+                                "currency": "USD",
+                                "trips": [
+                                    {"travel_mode": "Walking", "title": "Walk", "duration": 129, "distance": 150},
+                                    {"travel_mode": "Transit", "title": "5 Techi Center EB", "duration": 851, "start_stop": {"name": "3706 Lamar/38th", "time": "7:22 AM"}, "end_stop": {"name": "600 Lamar/6th", "time": "7:36 AM"}},
+                                    {"travel_mode": "Walking", "title": "Walk", "duration": 224, "distance": 254},
+                                ],
+                            }
+                        ],
+                    },
+                )
+            )
+        ),
+    )
+    route = provider.search(
+        "find_transit",
+        {"origin": "3810 N Lamar Blvd", "destination": "525 N Lamar Blvd", "arrive_by_iso": "2026-10-27T07:50:00-05:00"},
+    )[0]
+    assert route.transit_duration_minutes == 22
+    assert route.walking_duration_minutes == 7
+    assert route.boarding_stop == "3706 Lamar/38th"
+    assert route.alighting_stop == "600 Lamar/6th"
+    assert route.transit_legs[1].departure.hour == 7
+    assert route.transit_legs[1].arrival.minute == 36
+    assert route.fare_source == "SerpApi Google Maps Directions cost field"
+    assert route.fare_certainty == "provider_observed"
+    assert route.transit_time_constraint_honored is True
 
 
 def test_reviews_without_price_language_do_not_imply_affordability() -> None:
@@ -834,6 +917,9 @@ def test_late_and_one_way_routes_are_not_verified() -> None:
         "retrieved_at": datetime.fromisoformat("2026-10-24T12:00:00-05:00"),
         "transit_request_kind": "arrive_by",
         "transit_request_date": date_of_shift,
+        "transit_origin_matches": True,
+        "transit_destination_matches": True,
+        "transit_time_constraint_honored": False,
     }
     late = Evidence(**base, transit_arrival=datetime.fromisoformat("2026-10-27T08:15:00-05:00"))
     status, reason = assess_transit([late], context, [date_of_shift])
@@ -863,6 +949,43 @@ def test_late_and_one_way_routes_are_not_verified() -> None:
     assert assess_transit([on_time], context, [date_of_shift])[0] == "unknown"
 
 
+def test_missing_round_trip_fare_prevents_verified_transit() -> None:
+    from app.research_models import ResearchContext
+
+    day = date(2026, 10, 27)
+    common = {
+        "source_type": "transit_directions",
+        "provider_engine": "google_maps_directions",
+        "title": "Timed route",
+        "query": "Demo Home to Demo Work",
+        "retrieved_at": datetime.now(UTC),
+        "transit_request_date": day,
+        "transit_origin_matches": True,
+        "transit_destination_matches": True,
+        "transit_time_constraint_honored": True,
+        "fare_certainty": "unknown",
+    }
+    outbound = Evidence(
+        **common,
+        id="outbound",
+        transit_request_kind="arrive_by",
+        transit_arrival=datetime.fromisoformat("2026-10-27T07:45:00-05:00"),
+    )
+    returning = Evidence(
+        **common,
+        id="return",
+        transit_request_kind="depart_at",
+        transit_departure=datetime.fromisoformat("2026-10-27T16:05:00-05:00"),
+    )
+    status, reason = assess_transit(
+        [outbound, returning],
+        ResearchContext(home_location="Demo Home", work_location="Demo Work"),
+        [day],
+    )
+    assert status == "unknown"
+    assert "fare" in reason
+
+
 def test_late_transit_evidence_creates_shift_adjustment_hypothesis() -> None:
     class FakeGemini:
         def turn(self, trace, *, tools):
@@ -878,6 +1001,10 @@ def test_late_transit_evidence_creates_shift_adjustment_hypothesis() -> None:
         return httpx.Response(
             200,
             json={
+                "places_info": [
+                    {"address": request.url.params["start_addr"]},
+                    {"address": request.url.params["end_addr"]},
+                ],
                 "directions": [
                     {
                         "travel_mode": "Transit",
@@ -1114,7 +1241,7 @@ def test_schema_error_then_malformed_retry_preserves_diagnostics() -> None:
     assert all(not item.recovered for item in diagnostics)
 
 
-def test_eight_hypothesis_fixture_preserves_nine_candidates_after_extraction_failure() -> None:
+def test_eight_hypothesis_fixture_preserves_only_qualified_candidates_after_extraction_failure() -> None:
     class EightHypothesisGemini:
         def propose(self, context):
             rows = [
@@ -1255,13 +1382,21 @@ def test_eight_hypothesis_fixture_preserves_nine_candidates_after_extraction_fai
         ),
     )
     assert len(hypotheses) == 8 and sum(item.tool_calls_used for item in pathways) == 6
-    assert len(candidates) == 9
-    assert len({item.id for item in candidates}) == 9
+    assert len(candidates) == 7
+    assert len({item.id for item in candidates}) == 7
     assert len(meta.hypothesis_outcomes) == 8
     assert all(
-        item.status in {"conditional_candidate", "viable_candidate"}
+        item.status
+        in {
+            "conditional_candidate",
+            "viable_candidate",
+            "insufficient_evidence",
+            "blocked",
+            "rejected",
+        }
         for item in meta.hypothesis_outcomes
     )
+    assert all(item.reason for item in meta.hypothesis_outcomes)
     assert len(meta.extraction_diagnostics) == 2
     assert evidence and any(item.provider_engine == "google_maps_reviews" for item in evidence)
     assert any("failed twice" in item for item in warnings)

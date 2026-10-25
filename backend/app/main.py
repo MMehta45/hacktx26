@@ -32,7 +32,7 @@ from app.snapshot import SnapshotUnavailable, get_snapshot
 
 settings = get_settings()
 
-app = FastAPI(title="One Bad Tuesday API", version="0.1.0")
+app = FastAPI(title="One Bad Tuesday API", version="0.4.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
@@ -43,12 +43,18 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health() -> dict[str, str | dict[str, bool]]:
+def health() -> dict[str, object]:
     """Report API availability and whether optional integrations are configured."""
 
     return {
         "status": "ok",
         "service": "one-bad-tuesday-api",
+        "api_version": app.version,
+        "capabilities": {
+            "research": True,
+            "recovery_sessions": True,
+            "targeted_research": True,
+        },
         "integrations": settings.integration_status,
     }
 

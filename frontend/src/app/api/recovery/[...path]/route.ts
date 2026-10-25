@@ -13,17 +13,32 @@ async function forward(request: Request, segments: string[], method: "GET" | "PO
       cache: "no-store",
       signal: AbortSignal.timeout(130000),
     });
-    const body = (await response.json()) as unknown;
+    const body = (await response.json().catch(() => null)) as unknown;
     if (!response.ok) {
+      if (response.status === 404) {
+        const savedSessionLookup = method === "GET" && segments[0] === "sessions" && segments.length === 2;
+        const missingCreateRoute = method === "POST" && segments.join("/") === "sessions";
+        return NextResponse.json(
+          {
+            code: savedSessionLookup ? "RECOVERY_SESSION_NOT_FOUND" : "RECOVERY_ROUTE_MISSING",
+            message: savedSessionLookup
+              ? "This saved recovery session no longer exists. A fresh session will be created."
+              : missingCreateRoute
+                ? "The configured FastAPI process does not expose Build 04 recovery routes. Restart the backend from this repository and verify BACKEND_URL."
+                : "The configured FastAPI process does not recognize this recovery endpoint. Restart the current backend and retry.",
+          },
+          { status: savedSessionLookup ? 404 : 503 },
+        );
+      }
       return NextResponse.json(
-        { message: backendErrorMessage(body, response.status) },
+        { code: response.status === 422 ? "RECOVERY_PAYLOAD_INVALID" : "RECOVERY_BACKEND_ERROR", message: backendErrorMessage(body, response.status) },
         { status: response.status },
       );
     }
     return NextResponse.json(body);
   } catch {
     return NextResponse.json(
-      { message: "Recovery planning is unavailable. Start FastAPI and retry." },
+      { code: "RECOVERY_BACKEND_UNAVAILABLE", message: "Recovery planning cannot reach FastAPI. Check BACKEND_URL and start the current backend." },
       { status: 503 },
     );
   }

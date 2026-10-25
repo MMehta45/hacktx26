@@ -16,16 +16,23 @@ type Props = {
 
 type Status = { kind: "loading" | "idle" | "error"; message?: string };
 
+class RecoveryApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) {
+    super(message);
+  }
+}
+
 function signedMoney(cents: number) {
   return `${cents > 0 ? "+" : ""}${formatCurrency(cents)}`;
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
-  const body = (await response.json()) as T | { message?: string };
+  const body = (await response.json()) as T | { message?: string; code?: string };
   if (!response.ok) {
     const message = typeof body === "object" && body !== null && "message" in body && typeof body.message === "string" ? body.message : null;
-    throw new Error(message ?? `Request failed (${response.status}).`);
+    const code = typeof body === "object" && body !== null && "code" in body && typeof body.code === "string" ? body.code : undefined;
+    throw new RecoveryApiError(message ?? `Request failed (${response.status}).`, response.status, code);
   }
   return body as T;
 }
@@ -103,7 +110,15 @@ export function RecoveryStage({ request, research, onBack, onAdjust, onRestart }
         const saved = window.localStorage.getItem(storageKey);
         let next: RecoverySession | null = null;
         if (saved) {
-          try { next = await api<RecoverySession>(`/api/recovery/sessions/${saved}`); } catch { window.localStorage.removeItem(storageKey); }
+          try {
+            next = await api<RecoverySession>(`/api/recovery/sessions/${saved}`);
+          } catch (error) {
+            if (error instanceof RecoveryApiError && error.code === "RECOVERY_SESSION_NOT_FOUND") {
+              window.localStorage.removeItem(storageKey);
+            } else {
+              throw error;
+            }
+          }
         }
         if (!next) next = await api<RecoverySession>("/api/recovery/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
         if (!live) return;
@@ -135,7 +150,7 @@ export function RecoveryStage({ request, research, onBack, onAdjust, onRestart }
     } catch (error) { setStatus({ kind: "error", message: error instanceof Error ? error.message : "Targeted research failed." }); }
   }
 
-  if (!session) return <section className="py-12"><div className="rounded-2xl border border-slate-200 bg-white p-8"><h1 className="text-2xl font-semibold">Building recalculated recovery plans…</h1>{status.kind === "error" ? <p role="alert" className="mt-3 text-red-700">{status.message}</p> : <p className="mt-3 text-slate-600">Starting a versioned planning session with the authoritative simulator.</p>}</div></section>;
+  if (!session) return <section className="py-12"><div className="rounded-2xl border border-slate-200 bg-white p-8"><h1 className="text-2xl font-semibold">Building recalculated recovery plans…</h1>{status.kind === "error" ? <div role="alert" className="mt-3"><p className="text-red-700">{status.message}</p><button type="button" onClick={() => window.location.reload()} className="mt-4 rounded-lg bg-slate-950 px-4 py-2 text-sm font-semibold text-white">Retry recovery setup</button></div> : <p className="mt-3 text-slate-600">Starting a versioned planning session with the authoritative simulator.</p>}</div></section>;
   const questions = session.next_question_ids.map((id) => session.questions.find((item) => item.id === id)).filter((item): item is RecoveryQuestion => Boolean(item));
   const leads = session.candidate_actions.filter((item) => !item.quantified);
   return (

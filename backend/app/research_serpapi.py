@@ -2,8 +2,9 @@ import hashlib
 import json
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
+from math import ceil
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -39,9 +40,10 @@ def _review_snippets(row: dict) -> list[str]:
     return list(dict.fromkeys(values))
 
 
-def _minutes(value: object) -> int | None:
+def _duration_minutes(value: object) -> int | None:
     if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
-        return max(0, round(value / 60)) if value > 300 else round(value)
+        # SerpApi documents numeric direction/trip durations as seconds.
+        return ceil(value / 60) if value else 0
     if not isinstance(value, str):
         return None
     hours = re.search(r"(\d+)\s*(?:hour|hr)", value, re.IGNORECASE)
@@ -53,11 +55,23 @@ def _minutes(value: object) -> int | None:
     )
 
 
+def _address_key(value: object) -> str:
+    text = re.sub(r"\b(?:usa|united states)\b", "", str(value or "").casefold())
+    return re.sub(r"[^a-z0-9]+", "", text)
+
+
+def _addresses_match(requested: str | None, resolved: str | None) -> bool:
+    left, right = _address_key(requested), _address_key(resolved)
+    return bool(left and right and (left in right or right in left))
+
+
 def _local_time(value: object, day: datetime) -> datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = datetime.strptime(value.replace("\u202f", " "), "%I:%M %p").time()
+        parsed = datetime.strptime(
+            value.replace("\u202f", " ").replace("\xa0", " "), "%I:%M %p"
+        ).time()
         return datetime.combine(day.date(), parsed, ZoneInfo("America/Chicago"))
     except ValueError:
         return None
@@ -174,6 +188,17 @@ class SerpResearch:
         if not isinstance(rows, list):
             return []
         output: list[Evidence] = []
+        places = payload.get("places_info", [])
+        resolved_origin = (
+            places[0].get("address")
+            if isinstance(places, list) and len(places) > 0 and isinstance(places[0], dict)
+            else None
+        )
+        resolved_destination = (
+            places[1].get("address")
+            if isinstance(places, list) and len(places) > 1 and isinstance(places[1], dict)
+            else None
+        )
         query = (
             params.get("q")
             or f"{params.get('start_addr')} → {params.get('end_addr')} ({params.get('time', 'unscheduled')})"
@@ -187,9 +212,7 @@ class SerpResearch:
                 or row.get("place_id_search")
                 or payload.get("search_metadata", {}).get("google_maps_directions_url")
             )
-            title = _safe_text(
-                row.get("title") or row.get("name") or row.get("via") or "Listed result", 120
-            )
+            title = _safe_text(row.get("title") or row.get("name") or row.get("via"), 120)
             reviews = _review_snippets(row)
             snippet = _safe_text(
                 row.get("snippet")
@@ -225,16 +248,23 @@ class SerpResearch:
             walking_duration = 0
             transit_trip_count = 0
             legs: list[TransitLeg] = []
-            duration_minutes = _minutes(row.get("duration"))
+            duration_minutes = _duration_minutes(row.get("duration"))
+            time_constraint_honored = None
+            requested_time = None
             if engine == "google_maps_directions" and params.get("time"):
                 request_kind = params["time"].split(":", 1)[0]
-                date_local = datetime.fromtimestamp(
+                requested_time = datetime.fromtimestamp(
                     int(params["time"].split(":", 1)[1]), ZoneInfo("America/Chicago")
-                ).date()
+                )
+                date_local = requested_time.date()
                 request_date = date_local
                 local_day = datetime.combine(date_local, datetime.min.time(), ZoneInfo("America/Chicago"))
                 departure = _local_time(row.get("start_time"), local_day)
                 arrival = _local_time(row.get("end_time"), local_day)
+                if departure and arrival and arrival < departure:
+                    arrival += timedelta(days=1)
+                if duration_minutes is None and departure and arrival:
+                    duration_minutes = ceil((arrival - departure).total_seconds() / 60)
                 trips = row.get("trips", [])
                 if isinstance(trips, list):
                     for trip in trips:
@@ -259,14 +289,22 @@ class SerpResearch:
                             if isinstance(leg_distance, (int, float)) and leg_distance >= 0
                             else None
                         )
-                        leg_duration = _minutes(trip.get("duration"))
+                        leg_duration = _duration_minutes(trip.get("duration"))
                         route = _safe_text(trip.get("title"), 80) or None
+                        leg_departure = _local_time(
+                            start_stop.get("time") if isinstance(start_stop, dict) else None,
+                            local_day,
+                        )
+                        leg_arrival = _local_time(
+                            end_stop.get("time") if isinstance(end_stop, dict) else None,
+                            local_day,
+                        )
                         legs.append(
                             TransitLeg(
                                 mode=mode,
                                 route=route,
-                                departure=_local_time(trip.get("start_time"), local_day),
-                                arrival=_local_time(trip.get("end_time"), local_day),
+                                departure=leg_departure,
+                                arrival=leg_arrival,
                                 boarding_stop=boarding,
                                 alighting_stop=alighting,
                                 duration_minutes=leg_duration,
@@ -284,6 +322,28 @@ class SerpResearch:
                         elif mode == "walking":
                             walking_distance += leg_distance_meters or 0
                             walking_duration += leg_duration or 0
+                if request_kind == "arrive_by" and arrival:
+                    seconds_early = (requested_time - arrival).total_seconds()
+                    time_constraint_honored = 0 <= seconds_early <= 3 * 60 * 60
+                elif request_kind == "depart_at" and departure:
+                    seconds_late = (departure - requested_time).total_seconds()
+                    time_constraint_honored = 0 <= seconds_late <= 2 * 60 * 60
+                else:
+                    time_constraint_honored = False
+            if not title:
+                title = (
+                    f"Transit itinerary via {', '.join(dict.fromkeys(route_numbers))}"
+                    if route_numbers
+                    else "Transit itinerary"
+                )
+            facts = ["Provider returned this directions itinerary."]
+            limitations = [
+                "Personal ability to use transit and current service availability still require confirmation."
+            ]
+            if engine == "google_maps_directions" and time_constraint_honored is False:
+                limitations.append(
+                    "The returned itinerary did not honor the requested arrive-by/depart-at time and cannot protect a shift."
+                )
             output.append(
                 Evidence(
                     id=f"evidence-{stable}",
@@ -297,12 +357,8 @@ class SerpResearch:
                     url=url,
                     query=query,
                     retrieved_at=datetime.now(UTC),
-                    facts_supported=[
-                        "Provider listed this result; verify service and current terms with the source."
-                    ],
-                    limitations=[
-                        "Listing does not establish personal eligibility, availability, appointment, or approval."
-                    ],
+                    facts_supported=facts,
+                    limitations=limitations,
                     snippet=snippet,
                     source_domain=urlsplit(url).hostname if url else None,
                     observed_cost_cents=amount,
@@ -329,14 +385,23 @@ class SerpResearch:
                     if engine == "google_maps_directions"
                     else None,
                     transit_stops=list(dict.fromkeys(transit_stops)),
-                    transit_origin=params.get("start_addr") if engine == "google_maps_directions" else None,
-                    transit_destination=params.get("end_addr") if engine == "google_maps_directions" else None,
+                    transit_origin=resolved_origin if engine == "google_maps_directions" else None,
+                    transit_destination=resolved_destination if engine == "google_maps_directions" else None,
+                    transit_requested_origin=params.get("start_addr") if engine == "google_maps_directions" else None,
+                    transit_requested_destination=params.get("end_addr") if engine == "google_maps_directions" else None,
+                    transit_origin_matches=_addresses_match(params.get("start_addr"), resolved_origin)
+                    if engine == "google_maps_directions" and resolved_origin
+                    else None,
+                    transit_destination_matches=_addresses_match(params.get("end_addr"), resolved_destination)
+                    if engine == "google_maps_directions" and resolved_destination
+                    else None,
+                    transit_time_constraint_honored=time_constraint_honored,
                     transit_duration_minutes=duration_minutes,
                     walking_duration_minutes=walking_duration if engine == "google_maps_directions" else None,
                     boarding_stop=transit_stops[0] if transit_stops else None,
                     alighting_stop=transit_stops[-1] if transit_stops else None,
-                    fare_source="SerpApi directions payload" if amount is not None else None,
-                    fare_certainty="observed" if amount is not None else "unknown" if engine == "google_maps_directions" else None,
+                    fare_source="SerpApi Google Maps Directions cost field" if amount is not None else None,
+                    fare_certainty="provider_observed" if amount is not None else "unknown" if engine == "google_maps_directions" else None,
                     transit_legs=legs,
                 )
             )

@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 
 from app.models import ApiModel, CustomerSnapshot
 from app.simulation_models import CrisisSimulationRequest, SimulationResult
@@ -111,7 +111,13 @@ class PriorityTarget(ApiModel):
 
 class TransitLeg(ApiModel):
     mode: str
-    route: str | None = None
+    # `route` is the canonical wire field.  Build 03 emitted `route_name` in
+    # some payloads; accept that explicit legacy spelling without permitting
+    # arbitrary extras or losing the value during recovery-session validation.
+    route: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("route", "route_name"),
+    )
     departure: datetime | None = None
     arrival: datetime | None = None
     boarding_stop: str | None = None
@@ -155,12 +161,17 @@ class Evidence(ApiModel):
     transit_stops: list[str] = Field(default_factory=list)
     transit_origin: str | None = None
     transit_destination: str | None = None
+    transit_requested_origin: str | None = None
+    transit_requested_destination: str | None = None
+    transit_origin_matches: bool | None = None
+    transit_destination_matches: bool | None = None
+    transit_time_constraint_honored: bool | None = None
     transit_duration_minutes: int | None = Field(default=None, ge=0)
     walking_duration_minutes: int | None = Field(default=None, ge=0)
     boarding_stop: str | None = None
     alighting_stop: str | None = None
     fare_source: str | None = None
-    fare_certainty: Literal["observed", "unknown"] | None = None
+    fare_certainty: Literal["provider_observed", "official_published", "unknown"] | None = None
     transit_legs: list[TransitLeg] = Field(default_factory=list)
 
     @field_validator("url")
@@ -179,6 +190,21 @@ class Evidence(ApiModel):
         if value is not None and value.tzinfo is None:
             raise ValueError("Evidence timestamps must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def coherent_transit_fare(self) -> "Evidence":
+        if self.source_type != "transit_directions":
+            return self
+        if self.observed_cost_cents is None and self.fare_certainty in {
+            "provider_observed",
+            "official_published",
+        }:
+            raise ValueError("Known transit fare certainty requires an amount.")
+        if self.observed_cost_cents is not None and self.fare_certainty in {None, "unknown"}:
+            raise ValueError("A numeric transit fare requires known certainty.")
+        if self.observed_cost_cents is not None and not self.fare_source:
+            raise ValueError("A numeric transit fare requires a source.")
+        return self
 
 
 class Requirement(ApiModel):

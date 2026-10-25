@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { AUSTIN_DEMO_CONTEXT, researchRequestBody } from "./research";
+import { AUSTIN_DEMO_CONTEXT, filterUnsupportedMechanicRecommendations, researchRequestBody } from "./research";
+import type { ResearchResult } from "@/types/research";
 
 describe("Austin demo research context", () => {
   it("prefills the locked routing locations and shift times", () => {
@@ -32,5 +33,22 @@ describe("Austin demo research context", () => {
       remote_work_eligibility: "unknown",
     });
     expect(body.scenario.breakdown_date).toBe("2026-10-26");
+  });
+
+  it("suppresses generic or negative-only mechanic recommendations", () => {
+    const result = {
+      evidence: [
+        { id: "shop", source_type: "place" },
+        { id: "negative", source_type: "place_review", parent_place_evidence_id: "shop", positive_price_review_snippets: [], negative_price_review_snippets: ["Too expensive"] },
+        { id: "positive", source_type: "place_review", parent_place_evidence_id: "shop", positive_price_review_snippets: ["Fair price"] },
+      ],
+      candidate_actions: [
+        { id: "generic", mechanism: "repair_affordability", evidence_ids: ["shop"] },
+        { id: "negative-only", mechanism: "repair_affordability", evidence_ids: ["shop", "negative"] },
+        { id: "qualified", mechanism: "repair_affordability", evidence_ids: ["shop", "positive"] },
+        { id: "remote", mechanism: "income_preservation", evidence_ids: [] },
+      ],
+    } as unknown as ResearchResult;
+    expect(filterUnsupportedMechanicRecommendations(result).candidate_actions.map((item) => item.id)).toEqual(["qualified", "remote"]);
   });
 });

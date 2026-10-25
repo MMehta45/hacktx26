@@ -12,7 +12,7 @@ import {
   wageInputToCents,
   wagePreview,
 } from "@/lib/scenario";
-import { AUSTIN_DEMO_CONTEXT, researchRequestBody } from "@/lib/research";
+import { AUSTIN_DEMO_CONTEXT, filterUnsupportedMechanicRecommendations, researchRequestBody } from "@/lib/research";
 import type { CustomerSnapshot } from "@/types/customer";
 import type { CrisisSimulation, CrisisSimulationResponse } from "@/types/simulation";
 import type { ResearchResponse, ResearchResult } from "@/types/research";
@@ -183,7 +183,7 @@ export default function ScenarioApp() {
       const result = body as ResearchResponse;
       setSnapshot(result.snapshot);
       setSimulation(result.simulation);
-      setResearch(result.research);
+      setResearch(filterUnsupportedMechanicRecommendations(result.research));
       setResearchState({ kind: "idle" });
     } catch (error) {
       setResearchState({ kind: "error", message: error instanceof Error ? error.message : "Research request failed." });

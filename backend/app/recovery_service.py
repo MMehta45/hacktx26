@@ -210,6 +210,9 @@ def _transit_actions(
                 if item.transit_request_kind == "arrive_by"
                 and item.transit_arrival
                 and item.transit_arrival.replace(tzinfo=None) <= shift.scheduled_start_local
+                and item.transit_time_constraint_honored is True
+                and item.transit_origin_matches is True
+                and item.transit_destination_matches is True
             ),
             None,
         )
@@ -220,6 +223,9 @@ def _transit_actions(
                 if item.transit_request_kind == "depart_at"
                 and item.transit_departure
                 and item.transit_departure.replace(tzinfo=None) >= shift.scheduled_end_local
+                and item.transit_time_constraint_honored is True
+                and item.transit_origin_matches is True
+                and item.transit_destination_matches is True
             ),
             None,
         )
@@ -350,9 +356,24 @@ def _initial_actions(
     actions.extend(transit)
     requirements.extend(transit_requirements)
     if research:
+        evidence_by_id = {item.id: item for item in research.evidence}
         for candidate in research.candidate_actions:
             if candidate.mechanism not in {"transportation", "repair_affordability", "bill_flexibility", "assistance"}:
                 continue
+            if candidate.mechanism == "repair_affordability":
+                cited = [
+                    evidence_by_id[item]
+                    for item in candidate.evidence_ids
+                    if item in evidence_by_id
+                ]
+                place_ids = {item.id for item in cited if item.source_type == "place"}
+                if not any(
+                    item.source_type == "place_review"
+                    and item.positive_price_review_snippets
+                    and item.parent_place_evidence_id in place_ids
+                    for item in cited
+                ):
+                    continue
             action_id = f"investigate-{candidate.id}"
             if any(item.id == action_id for item in actions):
                 continue
