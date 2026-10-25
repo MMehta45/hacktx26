@@ -319,3 +319,44 @@ historical migration is required. Build 03.5 corrects only the forward forecast 
 the October 30 payroll now covers October 19–25 rather than a Thursday–Wednesday period.
 The existing explicit reset command remains available, but normal API reads never seed
 or mutate Nessie.
+
+## M4 — Interactive recovery optimization
+
+### Keep research, feasibility, and simulation as separate contracts
+
+Research candidates remain leads until the backend can compile them into typed, dated
+effects. Requirements separately record possible, pending approval, user-reported,
+externally verified, rejected, and expired states. The simulator receives effects—not
+research prose—and therefore remains deterministic and usable without Gemini. Conditional
+plans run under explicit assumptions while retaining their unresolved requirement IDs.
+
+### Reuse the derived simulator for every plan
+
+The optimizer never patches the untreated ending balance. It enumerates combinations of
+one to three among at most eight quantified actions, applies their typed effects, and
+reruns the shift/payroll/repair/bill engine. Stable shift and ledger IDs prevent duplicate
+wage recovery and cash flows. The same bill-protective repair rule applies to every plan.
+
+### Rank finances lexicographically, then diversify presentation
+
+Plans sort by feasibility, essential unpaid dollars and count, peak funding gap, recovered
+shifts, incremental cost, unresolved dependencies, and complexity. A second pass selects
+up to three different strategy signatures so a near-duplicate top three does not hide a
+meaningfully different option. The response retains ranking rationale and untreated
+comparison deltas.
+
+### Treat outreach and provider evidence as preparation, not execution
+
+A yes to possible remote work creates a copyable draft and a pending manager-approval
+requirement. It does not preserve a shift as a confirmed fact. Transit becomes executable
+only with dated outbound and return timing plus observed fares; personal usability remains
+a reusable condition. A mechanic is shown as affordable only when actual review excerpts
+contain positive pricing language, and even then the financial quote stays unknown until
+the user supplies a written amount and appointment date.
+
+### Bound targeted research independently
+
+Recovery sessions may spend a small per-round SerpApi budget within a larger session cap.
+Identical targeted queries are cached, provider failures preserve existing evidence and
+answers, and unquantified research leads never enter plan arithmetic. Session storage is
+in-memory for the prototype; the browser retains only an opaque session ID.

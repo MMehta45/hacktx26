@@ -109,6 +109,17 @@ class PriorityTarget(ApiModel):
         return self
 
 
+class TransitLeg(ApiModel):
+    mode: str
+    route: str | None = None
+    departure: datetime | None = None
+    arrival: datetime | None = None
+    boarding_stop: str | None = None
+    alighting_stop: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=0)
+    distance_meters: int | None = Field(default=None, ge=0)
+
+
 class Evidence(ApiModel):
     id: str
     source_type: Literal["web", "place", "place_review", "transit_directions"]
@@ -142,6 +153,15 @@ class Evidence(ApiModel):
     transfer_count: int | None = Field(default=None, ge=0)
     walking_distance_meters: int | None = Field(default=None, ge=0)
     transit_stops: list[str] = Field(default_factory=list)
+    transit_origin: str | None = None
+    transit_destination: str | None = None
+    transit_duration_minutes: int | None = Field(default=None, ge=0)
+    walking_duration_minutes: int | None = Field(default=None, ge=0)
+    boarding_stop: str | None = None
+    alighting_stop: str | None = None
+    fare_source: str | None = None
+    fare_certainty: Literal["observed", "unknown"] | None = None
+    transit_legs: list[TransitLeg] = Field(default_factory=list)
 
     @field_validator("url")
     @classmethod

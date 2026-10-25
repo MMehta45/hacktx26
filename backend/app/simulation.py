@@ -4,14 +4,23 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from app.models import CustomerSnapshot, UpcomingBill
 from app.simulation_models import (
+    AlternativeRepairQuoteEffect,
+    AssistanceEffect,
+    BillDueDateEffect,
     BillOutcome,
+    BillReductionEffect,
+    BorrowFundsEffect,
     CrisisSimulationRequest,
+    ExpenseEffect,
     FinancialEvent,
     IncomeLoss,
+    MakeupHoursEffect,
     PayrollRecord,
+    PreserveShiftEffect,
     ProblemEdge,
     ProblemNode,
     ProtectedObligation,
+    RecoveryEffect,
     RepairProjection,
     ShiftRecord,
     SimulationCashflowPoint,
@@ -140,12 +149,10 @@ def _graph_nodes(
 def simulate(
     snapshot: CustomerSnapshot,
     request: CrisisSimulationRequest,
-    actions: Sequence[object] = (),
+    actions: Sequence[RecoveryEffect] = (),
 ) -> SimulationResult:
     """Run a pure, deterministic employment and financial state-transition timeline."""
 
-    if actions:
-        raise ValueError("Recovery actions are reserved for a later milestone.")
     start = snapshot.cash_flow.start_date
     end = start + timedelta(days=request.forecast_horizon_days)
     breakdown_date = request.breakdown_date or _next_monday(start)
@@ -154,6 +161,96 @@ def simulate(
     breakdown_at = datetime.combine(breakdown_date, request.breakdown_time_local)
     balance = sum(account.balance_cents for account in snapshot.accounts)
     bills, warnings = _deduplicate_bills(snapshot.upcoming_bills, start, end)
+    effect_ids = [effect.effect_id for effect in actions]
+    if len(effect_ids) != len(set(effect_ids)):
+        raise ValueError("Recovery effect IDs must be unique.")
+    preserve_shift_ids: set[str] = set()
+    action_flows: dict[date, list[tuple[str, int, str, str]]] = {}
+    restricted_assistance: dict[str, int] = {}
+    makeup_wages: dict[date, int] = {}
+    makeup_original_shift_ids: set[str] = set()
+    repair_quote_cents = request.repair_quote_cents
+    repair_earliest_date = breakdown_date
+    changed_bill_ids: set[str] = set()
+    reduced_bill_ids: set[str] = set()
+    ledger_ids: set[str] = set()
+    bill_map = {bill.id: bill for bill in bills}
+
+    def add_flow(day: date, ledger_id: str, amount: int, event_type: str, description: str) -> None:
+        if ledger_id in ledger_ids:
+            raise ValueError(f"Duplicate recovery ledger ID: {ledger_id}.")
+        ledger_ids.add(ledger_id)
+        action_flows.setdefault(day, []).append((ledger_id, amount, event_type, description))
+
+    for effect in actions:
+        if isinstance(effect, PreserveShiftEffect):
+            preserve_shift_ids.update(effect.shift_ids)
+        elif isinstance(effect, ExpenseEffect):
+            add_flow(effect.date, effect.ledger_id, -effect.amount_cents, "action_expense", effect.description)
+        elif isinstance(effect, AssistanceEffect):
+            if (
+                effect.restricted_to_obligation_id
+                and effect.restricted_to_obligation_id not in bill_map
+            ):
+                raise ValueError("Restricted assistance references an unknown obligation.")
+            if effect.restricted_to_obligation_id:
+                add_flow(effect.arrival_date, effect.ledger_id, effect.amount_cents, "assistance", "Restricted assistance received")
+            else:
+                add_flow(effect.arrival_date, effect.ledger_id, effect.amount_cents, "assistance", "Unrestricted assistance received")
+        elif isinstance(effect, BorrowFundsEffect):
+            add_flow(effect.availability_date, effect.ledger_id, effect.principal_cents, "borrowing", "Borrowed funds received")
+            for repayment in effect.repayments:
+                add_flow(repayment.date, repayment.ledger_id, -repayment.amount_cents, "debt_payment", "Borrowed funds repayment")
+        elif isinstance(effect, BillDueDateEffect):
+            if effect.obligation_id in changed_bill_ids:
+                raise ValueError("A plan cannot move the same bill more than once.")
+            bill = bill_map.get(effect.obligation_id)
+            if bill is None or bill.due_date != effect.original_due_date:
+                raise ValueError("Bill extension does not match the current obligation.")
+            if effect.new_due_date > end:
+                raise ValueError("A bill extension must remain inside the forecast horizon.")
+            changed_bill_ids.add(effect.obligation_id)
+            bill_map[effect.obligation_id] = bill.model_copy(
+                update={"due_date": effect.new_due_date, "amount_cents": bill.amount_cents + effect.fee_cents}
+            )
+        elif isinstance(effect, BillReductionEffect):
+            bill = bill_map.get(effect.obligation_id)
+            if bill is None or effect.reduction_cents > bill.amount_cents:
+                raise ValueError("Bill reduction exceeds or cannot find the obligation.")
+            if effect.obligation_id in reduced_bill_ids:
+                raise ValueError("A plan cannot reduce the same bill more than once.")
+            if effect.effective_date > bill.due_date:
+                raise ValueError("A bill reduction must take effect no later than its due date.")
+            reduced_bill_ids.add(effect.obligation_id)
+            bill_map[effect.obligation_id] = bill.model_copy(
+                update={"amount_cents": bill.amount_cents - effect.reduction_cents}
+            )
+        elif isinstance(effect, AlternativeRepairQuoteEffect):
+            if repair_quote_cents != request.repair_quote_cents:
+                raise ValueError("A plan may contain only one alternative repair quote.")
+            repair_quote_cents = effect.quote_cents
+            repair_earliest_date = max(breakdown_date, effect.earliest_appointment_date)
+        elif isinstance(effect, MakeupHoursEffect):
+            if effect.original_shift_id in makeup_original_shift_ids:
+                raise ValueError("A missed shift cannot be made up more than once.")
+            makeup_original_shift_ids.add(effect.original_shift_id)
+            if effect.makeup_work_date.weekday() >= 5:
+                raise ValueError("Makeup work must be scheduled on a weekday.")
+            makeup_wages[effect.payroll_date] = makeup_wages.get(effect.payroll_date, 0) + (
+                _multiply_basis_points(request.hourly_rate_cents * effect.hours, TAKE_HOME_BASIS_POINTS)
+            )
+
+    if preserve_shift_ids & makeup_original_shift_ids:
+        raise ValueError("A shift cannot be both preserved and made up later.")
+    valid_shift_ids = {
+        f"shift-{(start + timedelta(days=offset)).isoformat()}"
+        for offset in range(request.forecast_horizon_days + 1)
+        if (start + timedelta(days=offset)).weekday() < 5
+    }
+    if (preserve_shift_ids | makeup_original_shift_ids) - valid_shift_ids:
+        raise ValueError("A recovery action references a shift outside the forecast.")
+
+    bills = sorted(bill_map.values(), key=lambda item: (item.due_date, item.id))
     bills_by_date: dict[date, list[UpcomingBill]] = {}
     for bill in bills:
         bills_by_date.setdefault(bill.due_date, []).append(bill)
@@ -217,21 +314,60 @@ def simulate(
     for offset in range(request.forecast_horizon_days + 1):
         current = start + timedelta(days=offset)
 
+        # Action cash effects happen at the start of their explicit date. Restricted
+        # assistance is recorded in the raw ledger but reserved for its named bill.
+        for ledger_id, amount, event_type, description in action_flows.get(current, []):
+            crisis_balance += amount
+            is_restricted = event_type == "assistance" and any(
+                effect.ledger_id == ledger_id and effect.restricted_to_obligation_id
+                for effect in actions
+                if isinstance(effect, AssistanceEffect)
+            )
+            if is_restricted:
+                assistance = next(
+                    effect
+                    for effect in actions
+                    if isinstance(effect, AssistanceEffect) and effect.ledger_id == ledger_id
+                )
+                obligation_id = assistance.restricted_to_obligation_id
+                if obligation_id:
+                    restricted_assistance[obligation_id] = (
+                        restricted_assistance.get(obligation_id, 0) + amount
+                    )
+            if not is_restricted:
+                constrained_cash = max(0, constrained_cash + amount)
+            events.append(
+                FinancialEvent(
+                    id=ledger_id,
+                    date=current,
+                    type=event_type,  # type: ignore[arg-type]
+                    signed_amount_cents=amount,
+                    description=description,
+                    source="recovery_action",
+                    status="scenario_assumption",
+                )
+            )
+
         # 08:00 shift occurs before Friday payroll, bills, and the end-of-day repair decision.
         if current.weekday() < 5:
             shift_start = datetime.combine(current, SHIFT_START)
             vehicle_usable = current < breakdown_date or (
                 current == breakdown_date and breakdown_at > shift_start
             ) or (repair_date is not None and repair_date < current)
-            attendance = "worked" if vehicle_usable else "projected_missed"
+            shift_id = f"shift-{current.isoformat()}"
+            action_preserved = shift_id in preserve_shift_ids
+            attendance = "worked" if vehicle_usable or action_preserved else "projected_missed"
             reason = (
+                "A recovery action preserves this shift under its explicit conditions."
+                if action_preserved and not vehicle_usable
+                else
                 "Vehicle was usable at the 08:00 shift start."
                 if vehicle_usable
                 else "Vehicle was unavailable at 08:00; untreated baseline assumes no alternate commute."
             )
             shift_records.append(
                 ShiftRecord(
-                    id=f"shift-{current.isoformat()}",
+                    id=shift_id,
                     date=current,
                     scheduled_start_local=shift_start,
                     scheduled_end_local=datetime.combine(current, SHIFT_END),
@@ -253,7 +389,8 @@ def simulate(
             ]
             worked = states.count("worked")
             missed = states.count("projected_missed")
-            actual = worked * net_shift
+            makeup = makeup_wages.get(current, 0)
+            actual = worked * net_shift + makeup
             # Sunday closes the period, but Friday is the final scheduled workday.
             final_scheduled_workday = period_end - timedelta(days=2)
             reliability = (
@@ -272,7 +409,7 @@ def simulate(
                 scheduled_shift_count=5,
                 worked_shift_count=worked,
                 missed_shift_count=missed,
-                lost_take_home_cents=net_week - actual,
+                lost_take_home_cents=max(0, net_week - actual),
                 reliability=reliability,
             )
             payroll_records.append(payroll)
@@ -283,30 +420,35 @@ def simulate(
             events.append(FinancialEvent(id=f"paycheck-{current.isoformat()}", date=current, type="paycheck", signed_amount_cents=net_week, description="Normal weekly take-home paycheck", source="user_wage_forecast", status="projected"))
             if payroll.lost_take_home_cents:
                 events.append(FinancialEvent(id=f"lost-wages-{current.isoformat()}", date=current, type="lost_wages", signed_amount_cents=-payroll.lost_take_home_cents, description=f"Estimated take-home lost from {missed} derived missed shift(s)", source="crisis_projection", status="projected"))
+            if makeup:
+                events.append(FinancialEvent(id=f"makeup-wages-{current.isoformat()}", date=current, type="makeup_wages", signed_amount_cents=makeup, description="Estimated take-home from approved makeup hours", source="recovery_action", status="scenario_assumption"))
 
         # Confirmed obligations are due after payroll; constrained cash never overdrafts.
         for bill in sorted(bills_by_date.get(current, []), key=lambda item: (not item.essential, item.id)):
             normal_balance -= bill.amount_cents
             crisis_balance -= bill.amount_cents
-            funded = min(constrained_cash, bill.amount_cents)
-            constrained_cash -= funded
+            restricted = min(restricted_assistance.get(bill.id, 0), bill.amount_cents)
+            cash_needed = bill.amount_cents - restricted
+            cash_funded = min(constrained_cash, cash_needed)
+            funded = restricted + cash_funded
+            constrained_cash -= cash_funded
             unpaid = bill.amount_cents - funded
             bill_outcomes.append(BillOutcome(obligation_id=bill.id, name=bill.name, amount_cents=bill.amount_cents, due_date=bill.due_date, funded_cents=funded, unpaid_cents=unpaid, essential=bill.essential, category=bill.category, projected_status="funded" if unpaid == 0 else "unpaid" if funded == 0 else "partially_unpaid", payment_priority=priority_counter, source=bill.source))
             priority_counter += 1
             events.append(FinancialEvent(id=f"bill-{bill.source}-{bill.id}", date=current, type="bill_due", signed_amount_cents=-bill.amount_cents, description=f"{bill.name} due", source=bill.source, status="projected", provenance_id=bill.nessie_bill_id or bill.id, essential=bill.essential))
 
         # Repair is considered last. A same-day payment cannot restore the 08:00 shift.
-        if current >= breakdown_date and repair_date is None:
+        if current >= repair_earliest_date and repair_date is None:
             reliable_payday, protected_bills = protection_window(current)
             protected_total = sum(item.amount_cents for item in protected_bills)
             last_protected = [ProtectedObligation(obligation_id=item.id, name=item.name, amount_cents=item.amount_cents, due_date=item.due_date) for item in protected_bills]
-            required = request.repair_quote_cents + protected_total
+            required = repair_quote_cents + protected_total
             if constrained_cash >= required:
                 repair_date = current
-                constrained_cash -= request.repair_quote_cents
-                crisis_balance -= request.repair_quote_cents
+                constrained_cash -= repair_quote_cents
+                crisis_balance -= repair_quote_cents
                 repair_cash_after = constrained_cash
-                events.append(FinancialEvent(id="repair-payment", date=current, type="repair_payment", signed_amount_cents=-request.repair_quote_cents, description="Bill-protective projected repair payment", source="crisis_projection", status="projected"))
+                events.append(FinancialEvent(id="repair-payment", date=current, type="repair_payment", signed_amount_cents=-repair_quote_cents, description="Bill-protective projected repair payment", source="crisis_projection", status="projected"))
                 last_blocked_reason = None
             else:
                 payday_text = reliable_payday.isoformat() if reliable_payday else "the forecast end"
@@ -332,7 +474,7 @@ def simulate(
     outage_end = repair_date or end
     unavailable_days = (outage_end - breakdown_date).days + 1
     repair = RepairProjection(
-        quote_cents=request.repair_quote_cents,
+        quote_cents=repair_quote_cents,
         earliest_financially_feasible_payment_date=repair_date,
         modeled_payment_date=repair_date,
         vehicle_restoration_date=repair_date,
@@ -345,14 +487,16 @@ def simulate(
     )
     unpaid_bills = [item for item in bill_outcomes if item.essential and item.unpaid_cents > 0]
     peak_gap = max(0, -min(point.crisis_balance_cents for point in points))
-    events.sort(key=lambda item: (item.date, {"paycheck": 0, "lost_wages": 1, "bill_due": 2, "repair_payment": 3}[item.type], item.id))
+    event_priority = {"assistance": 0, "borrowing": 0, "action_expense": 1, "paycheck": 2, "makeup_wages": 3, "lost_wages": 4, "bill_due": 5, "bill_fee": 5, "debt_payment": 6, "repair_payment": 7}
+    events.sort(key=lambda item: (item.date, event_priority[item.type], item.id))
     nodes = _graph_nodes(snapshot=snapshot, breakdown_date=breakdown_date, shifts=shift_records, payrolls=payroll_records, repair=repair, cashflow=points, unpaid_bills=unpaid_bills, peak_gap_cents=peak_gap)
     return SimulationResult(
         source=SimulationSource(customer_id=snapshot.customer.id, account_ids=[account.id for account in snapshot.accounts], current_balance_cents=balance, banking_mode=snapshot.source.mode, source_as_of_date=start, source_retrieved_at=snapshot.source.retrieved_at),
-        scenario=SimulationScenario(scenario_start_date=start, forecast_end_date=end, breakdown_at_local=breakdown_at, repair_quote_cents=request.repair_quote_cents, hourly_rate_cents=request.hourly_rate_cents, workdays=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]),
+        scenario=SimulationScenario(scenario_start_date=start, forecast_end_date=end, breakdown_at_local=breakdown_at, repair_quote_cents=request.repair_quote_cents, hourly_rate_cents=request.hourly_rate_cents, workdays=["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"], actions=sorted({effect.action_id for effect in actions})),
         shift_records=shift_records,
         payroll_records=payroll_records,
         repair_projection=repair,
+        applied_action_ids=sorted({effect.action_id for effect in actions}),
         events=events,
         cashflow=points,
         income_lost_by_payday=losses,

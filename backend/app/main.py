@@ -5,6 +5,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models import CustomerSnapshot
+from app.recovery_models import (
+    CreateRecoverySessionRequest,
+    EvaluateRecoveryRequest,
+    RecoverySession,
+    RequirementUpdateRequest,
+    SubmitAnswerRequest,
+    TargetedResearchRequest,
+    TargetedResearchResult,
+)
+from app.recovery_service import (
+    RecoverySessionNotFound,
+    RecoveryVersionConflict,
+    create_session,
+    evaluate_session,
+    get_session,
+    submit_answer,
+    targeted_research,
+    update_requirement,
+)
 from app.research_models import ResearchRequest, ResearchResponse
 from app.research_service import run_research
 from app.simulation import simulate
@@ -78,5 +97,87 @@ def research_interventions(request: ResearchRequest) -> ResearchResponse:
         return run_research(request, settings)
     except SnapshotUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/recovery/sessions", response_model=RecoverySession)
+def recovery_session_create(request: CreateRecoverySessionRequest) -> RecoverySession:
+    try:
+        return create_session(request, settings)
+    except SnapshotUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.get("/api/recovery/sessions/{session_id}", response_model=RecoverySession)
+def recovery_session_get(session_id: str) -> RecoverySession:
+    try:
+        return get_session(session_id)
+    except RecoverySessionNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.post("/api/recovery/sessions/{session_id}/answers", response_model=RecoverySession)
+def recovery_session_answer(
+    session_id: str, request: SubmitAnswerRequest
+) -> RecoverySession:
+    try:
+        return submit_answer(session_id, request)
+    except RecoverySessionNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RecoveryVersionConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/recovery/sessions/{session_id}/requirements", response_model=RecoverySession)
+def recovery_session_requirement(
+    session_id: str, request: RequirementUpdateRequest
+) -> RecoverySession:
+    try:
+        return update_requirement(session_id, request)
+    except RecoverySessionNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RecoveryVersionConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/recovery/sessions/{session_id}/evaluate", response_model=RecoverySession)
+def recovery_session_evaluate(
+    session_id: str, request: EvaluateRecoveryRequest
+) -> RecoverySession:
+    try:
+        return evaluate_session(session_id, request)
+    except RecoverySessionNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RecoveryVersionConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post(
+    "/api/recovery/sessions/{session_id}/research",
+    response_model=TargetedResearchResult,
+)
+def recovery_session_research(
+    session_id: str, request: TargetedResearchRequest
+) -> TargetedResearchResult:
+    try:
+        return targeted_research(
+            session_id,
+            request.candidate_ids,
+            request.session_version,
+            settings,
+        )
+    except RecoverySessionNotFound as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RecoveryVersionConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error

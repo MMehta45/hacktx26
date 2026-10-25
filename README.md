@@ -5,7 +5,8 @@ interactive four-stage shell, a normalized synthetic customer snapshot, a Capita
 Nessie seed/read path, spending analysis, upcoming obligations and income, and a
 deterministic 30-day crisis simulator with an inspectable consequence graph. The Explore
 stage performs bounded Gemini and SerpApi research and shows source-linked potential
-interventions and pending questions. Recovery plans remain a disabled preview.
+interventions. The Plan stage turns confirmed or explicitly conditional actions into
+dated financial effects and ranks up to three recalculated recovery strategies.
 
 ## Prerequisites
 
@@ -95,6 +96,7 @@ npm run dev
 - Snapshot API: <http://127.0.0.1:8000/api/customer/snapshot>
 - Crisis simulator: `POST http://127.0.0.1:8000/api/simulations/crisis`
 - Research: `POST http://127.0.0.1:8000/api/research/interventions`
+- Recovery sessions: `POST http://127.0.0.1:8000/api/recovery/sessions`
 - FastAPI docs: <http://127.0.0.1:8000/docs>
 
 The browser calls same-origin Next.js routes, which forward to FastAPI. Backend secrets
@@ -137,10 +139,31 @@ never enter browser code.
    evidence. A single late itinerary is conditional evidence, not proof that all transit
    is unavailable.
 5. Repair research can follow Maps listings with real Google Maps Reviews calls. The
-   shortlist shows positive and negative price language, confidence, and source links.
-   Reviews prioritize shops to contact; they never establish the cheapest shop or replace
-   a written estimate. Questions are pending inputs for Build 04, and no action is applied
-   to the cash-flow simulator in Build 03.
+   shortlist only recommends a shop on affordability grounds when an actual returned review
+   contains positive pricing language. Reviews never establish the cheapest shop or replace
+   a written estimate.
+
+## Demo interactive recovery (Build 04)
+
+1. Complete the crisis simulation and optionally run Explore research. Select **Build
+   recovery plans**. A versioned recovery session is retained across browser refreshes;
+   restarting FastAPI clears server-side sessions.
+2. Answer one or two high-impact questions. Saying remote work is possible creates a
+   ready-to-copy employer request but keeps manager approval pending. Confirm approval
+   only if it actually occurred.
+3. Compare up to three plans. Each card shows conditional dependencies, untreated versus
+   recalculated bill/gap/balance outcomes, missed shifts, repair timing, dated cash
+   checkpoints, cascade-node changes, sources, and next steps.
+4. Confirm or reject an unresolved requirement to rerank plans. Enter a confirmed rent
+   date or written repair quote when prompted; those values become typed simulator effects.
+5. Use **Research this dependency** for a bounded targeted SerpApi pass. Timed transit
+   actions require both shift-compatible directions and observed fares. Existing answers
+   and plans remain if research fails.
+
+All plans are hypothetical copies. The app never sends a draft, obtains approval, books a
+repair, borrows money, changes a Nessie transaction, or treats a conditional outcome as
+guaranteed. `RECOVERY_RESEARCH_MAX_CALLS` limits one targeted round and
+`RECOVERY_SESSION_MAX_CALLS` caps a session.
 
 The default pass permits at most six SerpApi HTTP requests, including retries; explicit
 refresh permits eight. Results are cached in backend memory for 15 minutes per relevant
@@ -191,7 +214,7 @@ All credentials belong in `backend/.env`. Never put them in `frontend/.env.local
 | `SERPAPI_API_KEY` | Backend-only web, places, and transit search key for Explore |
 | `GEMINI_API_KEY` | Backend-only Gemini tool selection and candidate extraction key |
 | `GEMINI_MODEL` | Configured Gemini model, default `gemini-3.5-flash-lite` |
-| `RESEARCH_*` | Backend search, iteration, deadline, and cache limits; see `.env.example` |
+| `RESEARCH_*`, `RECOVERY_*` | Backend discovery and targeted recovery-research limits; see `.env.example` |
 | `NESSIE_BASE_URL` | Nessie API origin; defaults to `https://prod-api.nessieisreal.com` |
 | `DEMO_DATA_MODE` | `auto`, `fixture`, or strict `nessie` mode |
 | `DEMO_ANCHOR_DATE` | Frozen ISO date used for repeatable 90-day history and schedules |
@@ -215,8 +238,9 @@ Run the complete suite:
 npm test
 ```
 
-This runs backend contract, normalization, simulator arithmetic, due-date allocation,
-graph, idempotency, and offline research tests; frontend wage, crisis, and Explore-render tests; TypeScript; ESLint;
+This runs backend contract, normalization, simulator/effect arithmetic, plan ranking,
+sessions, due-date allocation, graph, idempotency, and offline research tests; frontend
+wage, crisis, Explore, and conditional-plan render tests; TypeScript; ESLint;
 and a production Next.js build. Backend lint is separate:
 
 ```bash
@@ -241,6 +265,6 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M3.5.md](docs/progress/M3.5.md) for actual milestone verification. Real
+[docs/progress/M4.md](docs/progress/M4.md) for actual milestone verification. Real
 provider calls are opt-in through Explore; ordinary automated tests use fake adapters
 and do not spend API quota.

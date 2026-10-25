@@ -571,12 +571,7 @@ def _ground_repair_candidate(
     if candidate.mechanism != "repair_affordability":
         return candidate
     sources = [evidence_by_id[source] for source in candidate.evidence_ids]
-    evidence_text = " ".join(
-        [source.snippet or "" for source in sources]
-        + [snippet for source in sources for snippet in source.review_snippets]
-    ).casefold()
-    price_terms = ("affordable", "fair price", "reasonable price", "honest price", "value")
-    if any(term in evidence_text for term in price_terms):
+    if any(source.positive_price_review_snippets for source in sources):
         return candidate
     requirements = list(candidate.requirements)
     if not any(requirement.key == "written_repair_estimate" for requirement in requirements):
@@ -709,7 +704,12 @@ def _seed_remote_work(simulation: SimulationResult) -> tuple[CandidateAction, Cl
 def _mechanic_shortlist(evidence: list[Evidence]) -> list[CandidateAction]:
     places = {item.id: item for item in evidence if item.source_type == "place"}
     reviews = sorted(
-        [item for item in evidence if item.source_type == "place_review"],
+        [
+            item
+            for item in evidence
+            if item.source_type == "place_review"
+            and item.positive_price_review_snippets
+        ],
         key=lambda item: (-(item.shop_score or 0), item.title),
     )
     output: list[CandidateAction] = []
@@ -1221,7 +1221,13 @@ def research_with_agent(
                                     0.45 * (review.price_evidence_score or 0)
                                     + 0.25 * (review.transparency_evidence_score or 0)
                                     + 0.20 * reputation
-                                    + 0.10 * 0.5,
+                                    + 0.10 * 0.5
+                                    - 0.20
+                                    * min(
+                                        1.0,
+                                        len(review.negative_price_review_snippets)
+                                        / max(3, len(review.review_snippets)),
+                                    ),
                                     3,
                                 )
                                 review = review.model_copy(update={"shop_score": score})

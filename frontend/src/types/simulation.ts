@@ -96,7 +96,7 @@ export type CrisisSimulation = {
   events: Array<{
     id: string;
     date: string;
-    type: "paycheck" | "bill_due" | "lost_wages" | "repair_payment";
+    type: "paycheck" | "bill_due" | "lost_wages" | "repair_payment" | "action_expense" | "assistance" | "borrowing" | "debt_payment" | "bill_fee" | "makeup_wages";
     signed_amount_cents: number;
     description: string;
     source: string;
@@ -138,6 +138,7 @@ export type CrisisSimulation = {
   }>;
   graph_edges: Array<{ id: string; source: string; target: string; condition: string | null }>;
   warnings: string[];
+  applied_action_ids: string[];
 };
 
 export type CrisisSimulationResponse = {

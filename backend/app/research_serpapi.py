@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from app.research_models import Evidence, clean_url
+from app.research_models import Evidence, TransitLeg, clean_url
 
 
 class SearchFailure(RuntimeError):
@@ -37,6 +37,30 @@ def _review_snippets(row: dict) -> list[str]:
             if text:
                 values.append(_safe_text(text, 220))
     return list(dict.fromkeys(values))
+
+
+def _minutes(value: object) -> int | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+        return max(0, round(value / 60)) if value > 300 else round(value)
+    if not isinstance(value, str):
+        return None
+    hours = re.search(r"(\d+)\s*(?:hour|hr)", value, re.IGNORECASE)
+    minutes = re.search(r"(\d+)\s*(?:minute|min)", value, re.IGNORECASE)
+    if not hours and not minutes:
+        return None
+    return (int(hours.group(1)) * 60 if hours else 0) + (
+        int(minutes.group(1)) if minutes else 0
+    )
+
+
+def _local_time(value: object, day: datetime) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.strptime(value.replace("\u202f", " "), "%I:%M %p").time()
+        return datetime.combine(day.date(), parsed, ZoneInfo("America/Chicago"))
+    except ValueError:
+        return None
 
 
 class SerpResearch:
@@ -198,46 +222,68 @@ class SerpResearch:
             route_numbers: list[str] = []
             transit_stops: list[str] = []
             walking_distance = 0
+            walking_duration = 0
             transit_trip_count = 0
+            legs: list[TransitLeg] = []
+            duration_minutes = _minutes(row.get("duration"))
             if engine == "google_maps_directions" and params.get("time"):
                 request_kind = params["time"].split(":", 1)[0]
                 date_local = datetime.fromtimestamp(
                     int(params["time"].split(":", 1)[1]), ZoneInfo("America/Chicago")
                 ).date()
                 request_date = date_local
-                for field, name in (("start_time", "departure"), ("end_time", "arrival")):
-                    raw = row.get(field)
-                    if isinstance(raw, str):
-                        try:
-                            parsed = datetime.strptime(
-                                raw.replace("\u202f", " "), "%I:%M %p"
-                            ).time()
-                            value = datetime.combine(
-                                date_local, parsed, ZoneInfo("America/Chicago")
-                            )
-                            if name == "departure":
-                                departure = value
-                            else:
-                                arrival = value
-                        except ValueError:
-                            pass
+                local_day = datetime.combine(date_local, datetime.min.time(), ZoneInfo("America/Chicago"))
+                departure = _local_time(row.get("start_time"), local_day)
+                arrival = _local_time(row.get("end_time"), local_day)
                 trips = row.get("trips", [])
                 if isinstance(trips, list):
                     for trip in trips:
                         if not isinstance(trip, dict):
                             continue
-                        if str(trip.get("travel_mode", "")).casefold() == "transit":
+                        mode = str(trip.get("travel_mode", "unknown")).casefold()
+                        start_stop = trip.get("start_stop")
+                        end_stop = trip.get("end_stop")
+                        boarding = (
+                            _safe_text(start_stop.get("name"), 100)
+                            if isinstance(start_stop, dict) and start_stop.get("name")
+                            else None
+                        )
+                        alighting = (
+                            _safe_text(end_stop.get("name"), 100)
+                            if isinstance(end_stop, dict) and end_stop.get("name")
+                            else None
+                        )
+                        leg_distance = trip.get("distance")
+                        leg_distance_meters = (
+                            int(leg_distance)
+                            if isinstance(leg_distance, (int, float)) and leg_distance >= 0
+                            else None
+                        )
+                        leg_duration = _minutes(trip.get("duration"))
+                        route = _safe_text(trip.get("title"), 80) or None
+                        legs.append(
+                            TransitLeg(
+                                mode=mode,
+                                route=route,
+                                departure=_local_time(trip.get("start_time"), local_day),
+                                arrival=_local_time(trip.get("end_time"), local_day),
+                                boarding_stop=boarding,
+                                alighting_stop=alighting,
+                                duration_minutes=leg_duration,
+                                distance_meters=leg_distance_meters,
+                            )
+                        )
+                        if mode == "transit":
                             transit_trip_count += 1
-                            if trip.get("title"):
-                                route_numbers.append(_safe_text(trip["title"], 80))
-                            for stop_key in ("start_stop", "end_stop"):
-                                stop = trip.get(stop_key)
-                                if isinstance(stop, dict) and stop.get("name"):
-                                    transit_stops.append(_safe_text(stop["name"], 100))
-                        elif str(trip.get("travel_mode", "")).casefold() == "walking":
-                            distance = trip.get("distance")
-                            if isinstance(distance, (int, float)) and distance >= 0:
-                                walking_distance += int(distance)
+                            if route:
+                                route_numbers.append(route)
+                            if boarding:
+                                transit_stops.append(boarding)
+                            if alighting:
+                                transit_stops.append(alighting)
+                        elif mode == "walking":
+                            walking_distance += leg_distance_meters or 0
+                            walking_duration += leg_duration or 0
             output.append(
                 Evidence(
                     id=f"evidence-{stable}",
@@ -283,6 +329,15 @@ class SerpResearch:
                     if engine == "google_maps_directions"
                     else None,
                     transit_stops=list(dict.fromkeys(transit_stops)),
+                    transit_origin=params.get("start_addr") if engine == "google_maps_directions" else None,
+                    transit_destination=params.get("end_addr") if engine == "google_maps_directions" else None,
+                    transit_duration_minutes=duration_minutes,
+                    walking_duration_minutes=walking_duration if engine == "google_maps_directions" else None,
+                    boarding_stop=transit_stops[0] if transit_stops else None,
+                    alighting_stop=transit_stops[-1] if transit_stops else None,
+                    fare_source="SerpApi directions payload" if amount is not None else None,
+                    fare_certainty="observed" if amount is not None else "unknown" if engine == "google_maps_directions" else None,
+                    transit_legs=legs,
                 )
             )
         return output
@@ -314,16 +369,21 @@ class SerpResearch:
             snippet = _safe_text(raw, 300)
             snippets.append(snippet)
             folded = snippet.casefold()
-            if any(term in folded for term in positive_terms):
+            positive_match = any(term in folded for term in positive_terms)
+            negated_positive = any(
+                re.search(rf"\b(?:not|never|isn't|wasn't|hardly)\s+(?:very\s+)?{re.escape(term)}", folded)
+                for term in positive_terms
+            )
+            if positive_match and not negated_positive:
                 positive.append(snippet)
-            if any(term in folded for term in negative_terms):
+            if any(term in folded for term in negative_terms) or negated_positive:
                 negative.append(snippet)
             if any(term in folded for term in transparency_terms):
                 transparent += 1
         if not snippets:
             return []
         total = len(snippets)
-        price_score = min(1.0, (len(positive) + len(negative)) / max(3, total))
+        price_score = min(1.0, len(positive) / max(3, total))
         transparency_score = min(1.0, transparent / max(2, total))
         confidence = (
             "moderate"

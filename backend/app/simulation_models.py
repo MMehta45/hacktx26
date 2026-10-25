@@ -1,5 +1,5 @@
 from datetime import date, datetime, time
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
@@ -13,6 +13,115 @@ class CrisisSimulationRequest(ApiModel):
     breakdown_date: date | None = None
     breakdown_time_local: time = time(7, 0)
     forecast_horizon_days: int = Field(default=30, ge=1, le=30)
+
+
+EffectCertainty = Literal[
+    "confirmed", "user_reported", "conditional", "provider_observed"
+]
+
+
+class EffectBase(ApiModel):
+    effect_id: str
+    action_id: str
+    requirement_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    certainty: EffectCertainty = "conditional"
+
+
+class PreserveShiftEffect(EffectBase):
+    effect_type: Literal["preserve_shift"] = "preserve_shift"
+    shift_ids: list[str] = Field(min_length=1)
+
+
+class ExpenseEffect(EffectBase):
+    effect_type: Literal["expense"] = "expense"
+    ledger_id: str
+    amount_cents: int = Field(gt=0)
+    date: date
+    description: str
+    supported_shift_ids: list[str] = Field(default_factory=list)
+
+
+class BillDueDateEffect(EffectBase):
+    effect_type: Literal["change_bill_due_date"] = "change_bill_due_date"
+    obligation_id: str
+    original_due_date: date
+    new_due_date: date
+    fee_cents: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def due_date_moves_forward(self) -> "BillDueDateEffect":
+        if self.new_due_date <= self.original_due_date:
+            raise ValueError("A bill extension must move the due date forward.")
+        return self
+
+
+class BillReductionEffect(EffectBase):
+    effect_type: Literal["reduce_bill"] = "reduce_bill"
+    obligation_id: str
+    reduction_cents: int = Field(gt=0)
+    effective_date: date
+
+
+class AssistanceEffect(EffectBase):
+    effect_type: Literal["assistance"] = "assistance"
+    ledger_id: str
+    amount_cents: int = Field(gt=0)
+    arrival_date: date
+    restricted_to_obligation_id: str | None = None
+
+
+class AlternativeRepairQuoteEffect(EffectBase):
+    effect_type: Literal["alternative_repair_quote"] = "alternative_repair_quote"
+    quote_cents: int = Field(ge=1_000, le=150_000)
+    earliest_appointment_date: date
+
+
+class Repayment(ApiModel):
+    ledger_id: str
+    date: date
+    amount_cents: int = Field(gt=0)
+
+
+class BorrowFundsEffect(EffectBase):
+    effect_type: Literal["borrow_funds"] = "borrow_funds"
+    ledger_id: str
+    principal_cents: int = Field(gt=0)
+    availability_date: date
+    repayments: list[Repayment] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def repayments_follow_funding(self) -> "BorrowFundsEffect":
+        if any(item.date <= self.availability_date for item in self.repayments):
+            raise ValueError("Borrowing repayments must occur after funds become available.")
+        return self
+
+
+class MakeupHoursEffect(EffectBase):
+    effect_type: Literal["makeup_hours"] = "makeup_hours"
+    original_shift_id: str
+    makeup_work_date: date
+    hours: int = Field(gt=0, le=8)
+    payroll_date: date
+
+    @model_validator(mode="after")
+    def payroll_follows_work(self) -> "MakeupHoursEffect":
+        if self.payroll_date <= self.makeup_work_date or self.payroll_date.weekday() != 4:
+            raise ValueError("Makeup hours must be paid on a later Friday payroll.")
+        return self
+
+
+RecoveryEffect = Annotated[
+    PreserveShiftEffect
+    | ExpenseEffect
+    | BillDueDateEffect
+    | BillReductionEffect
+    | AssistanceEffect
+    | AlternativeRepairQuoteEffect
+    | BorrowFundsEffect
+    | MakeupHoursEffect,
+    Field(discriminator="effect_type"),
+]
 
 
 class SimulationScenario(ApiModel):
@@ -86,7 +195,18 @@ class RepairProjection(ApiModel):
 class FinancialEvent(ApiModel):
     id: str
     date: date
-    type: Literal["paycheck", "bill_due", "lost_wages", "repair_payment"]
+    type: Literal[
+        "paycheck",
+        "bill_due",
+        "lost_wages",
+        "repair_payment",
+        "action_expense",
+        "assistance",
+        "borrowing",
+        "debt_payment",
+        "bill_fee",
+        "makeup_wages",
+    ]
     signed_amount_cents: int
     description: str
     source: str
@@ -161,6 +281,7 @@ class SimulationResult(ApiModel):
     shift_records: list[ShiftRecord]
     payroll_records: list[PayrollRecord]
     repair_projection: RepairProjection
+    applied_action_ids: list[str] = Field(default_factory=list)
     events: list[FinancialEvent]
     cashflow: list[SimulationCashflowPoint]
     income_lost_by_payday: list[IncomeLoss]

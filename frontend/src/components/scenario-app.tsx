@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 
 import { CrisisStage } from "@/components/crisis-stage";
 import { ResearchStage } from "@/components/research-stage";
+import { RecoveryStage } from "@/components/recovery-stage";
 import {
   DEFAULT_HOURLY_WAGE,
   DEFAULT_REPAIR_QUOTE,
@@ -15,6 +16,7 @@ import { AUSTIN_DEMO_CONTEXT, researchRequestBody } from "@/lib/research";
 import type { CustomerSnapshot } from "@/types/customer";
 import type { CrisisSimulation, CrisisSimulationResponse } from "@/types/simulation";
 import type { ResearchResponse, ResearchResult } from "@/types/research";
+import type { CreateRecoverySessionBody } from "@/types/recovery";
 
 type Stage = 1 | 2 | 3 | 4;
 type RequestState = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string };
@@ -23,7 +25,7 @@ const stages: Array<{ id: Stage; short: string; label: string }> = [
   { id: 1, short: "Start", label: "Set the scene" },
   { id: 2, short: "Crisis", label: "Untreated simulation" },
   { id: 3, short: "Explore", label: "Research possible interventions" },
-  { id: 4, short: "Plan", label: "Recovery preview" },
+  { id: 4, short: "Plan", label: "Interactive recovery plans" },
 ];
 
 function DataBadge({ snapshot }: { snapshot: CustomerSnapshot }) {
@@ -114,10 +116,6 @@ function StartStage({
   );
 }
 
-function PlanPreview({ onBack, onAdjust, onRestart }: { onBack: () => void; onAdjust: () => void; onRestart: () => void }) {
-  return <section className="py-10"><div className="rounded-[2rem] border border-slate-800 bg-slate-950 p-7 text-white shadow-xl sm:p-10"><span className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-300">Coming later · no recommendation generated</span><div className="mt-6 max-w-3xl"><p className="font-mono text-xs uppercase tracking-[0.2em] text-orange-300">Stage 04</p><h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">A coordinated recovery plan will live here.</h1><p className="mt-5 text-lg leading-8 text-slate-300">Build Sheet 04 will compare actions against the same simulation contract. Explore has found possible interventions, but no action has been applied or financially validated yet.</p></div><div className="mt-10 grid gap-4 md:grid-cols-3">{["Plan actions", "Cash + bills", "Evidence + risks"].map((title, index) => <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-5"><span className="font-mono text-xs text-slate-500">0{index + 1}</span><h2 className="mt-4 font-semibold text-slate-200">{title}</h2><div className="mt-4 space-y-2" aria-hidden="true"><div className="h-2 w-full rounded bg-white/10" /><div className="h-2 w-4/5 rounded bg-white/10" /></div></div>)}</div></div><div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-between"><button type="button" onClick={onBack} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">← Back to Explore</button><div className="flex gap-3"><button type="button" onClick={onAdjust} className="rounded-xl border border-slate-300 bg-white px-5 py-3 font-semibold text-slate-700">Adjust inputs</button><button type="button" onClick={onRestart} className="rounded-xl bg-orange-600 px-5 py-3 font-semibold text-white">Restart</button></div></div></section>;
-}
-
 export default function ScenarioApp() {
   const [stage, setStage] = useState<Stage>(1);
   const [name, setName] = useState("Maya Rodriguez");
@@ -131,6 +129,15 @@ export default function ScenarioApp() {
   const [researchState, setResearchState] = useState<RequestState>({ kind: "idle" });
   const [routeContext, setRouteContext] = useState({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd });
   const snapshotQuery = useMemo(() => new URLSearchParams({ display_name: "Maya Rodriguez", hourly_rate_cents: "2000", repair_quote_cents: "40000" }), []);
+  const recoveryRequest = useMemo<CreateRecoverySessionBody | null>(() => {
+    const hourlyRateCents = wageInputToCents(hourlyWage);
+    if (hourlyRateCents === null) return null;
+    return {
+      scenario: { display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, breakdown_date: breakdownDate },
+      research,
+      context: { city: AUSTIN_DEMO_CONTEXT.city, home_location: routeContext.home, work_location: routeContext.work, shift_start_local: routeContext.shiftStart, shift_end_local: routeContext.shiftEnd, timezone: AUSTIN_DEMO_CONTEXT.timezone },
+    };
+  }, [breakdownDate, hourlyWage, name, repairQuote, research, routeContext]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -199,9 +206,9 @@ export default function ScenarioApp() {
         {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} breakdownDate={breakdownDate} snapshot={snapshot} requestState={requestState} onNameChange={(value) => { setName(value); setResearch(null); }} onWageChange={(value) => { setHourlyWage(value); setResearch(null); }} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onBreakdownDateChange={(value) => { setBreakdownDate(value); setResearch(null); }} onSubmit={() => void runSimulation()} /> : null}
         {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
         {stage === 3 && simulation ? <ResearchStage research={research} loading={researchState.kind === "loading"} error={researchState.kind === "error" ? researchState.message : null} home={routeContext.home} work={routeContext.work} shiftStart={routeContext.shiftStart} shiftEnd={routeContext.shiftEnd} onContextChange={changeRouteContext} onRun={(force) => void runResearch(force)} onBack={() => setStage(2)} onNext={() => setStage(4)} /> : null}
-        {stage === 4 && simulation ? <PlanPreview onBack={() => setStage(3)} onAdjust={() => setStage(1)} onRestart={restart} /> : null}
+        {stage === 4 && simulation && recoveryRequest ? <RecoveryStage request={recoveryRequest} research={research} onBack={() => setStage(3)} onAdjust={() => setStage(1)} onRestart={restart} /> : null}
       </div>
-      <footer className="border-t border-slate-200 px-5 py-6 text-center text-xs leading-5 text-slate-500">Synthetic crisis forecast for a HackTX prototype. Research is informational; no payment, loan, or recovery plan is executed.</footer>
+      <footer className="border-t border-slate-200 px-5 py-6 text-center text-xs leading-5 text-slate-500">Synthetic crisis forecast for a HackTX prototype. Conditional plans are not guarantees; drafts are not sent and no payment, loan, or banking transaction is executed.</footer>
     </main>
   );
 }

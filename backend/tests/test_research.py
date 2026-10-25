@@ -621,6 +621,71 @@ def test_google_maps_reviews_parses_positive_and_negative_price_evidence() -> No
     assert result.price_evidence_score and result.price_evidence_score > 0
 
 
+def test_transit_directions_preserve_itinerary_times_fare_and_legs() -> None:
+    provider = SerpResearch(
+        "fake",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "directions": [
+                            {
+                                "via": "7 and 803",
+                                "start_time": "6:52 AM",
+                                "end_time": "7:42 AM",
+                                "duration": "50 min",
+                                "cost": "$2.50",
+                                "trips": [
+                                    {"travel_mode": "Walking", "duration": "8 min", "distance": 540},
+                                    {"travel_mode": "Transit", "title": "Bus 7", "duration": "18 min", "start_stop": {"name": "N Lamar/38th"}, "end_stop": {"name": "UT West Mall"}},
+                                    {"travel_mode": "Transit", "title": "Rapid 803", "duration": "16 min", "start_stop": {"name": "UT West Mall"}, "end_stop": {"name": "5th/Lamar"}},
+                                    {"travel_mode": "Walking", "duration": "8 min", "distance": 430},
+                                ],
+                            }
+                        ]
+                    },
+                )
+            )
+        ),
+    )
+    route = provider.search(
+        "find_transit",
+        {
+            "origin": "3810 N Lamar Blvd, Austin, TX",
+            "destination": "525 N Lamar Blvd, Austin, TX",
+            "arrive_by_iso": "2026-10-27T07:50:00-05:00",
+        },
+    )[0]
+    assert route.observed_cost_cents == 250
+    assert route.fare_certainty == "observed"
+    assert route.transit_duration_minutes == 50
+    assert route.walking_duration_minutes == 16
+    assert route.route_numbers == ["Bus 7", "Rapid 803"]
+    assert route.transfer_count == 1
+    assert route.boarding_stop == "N Lamar/38th"
+    assert route.alighting_stop == "5th/Lamar"
+    assert len(route.transit_legs) == 4
+
+
+def test_negated_affordable_review_is_not_positive_price_evidence() -> None:
+    provider = SerpResearch(
+        "fake",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={"reviews": [{"snippet": "This shop was not affordable for me."}]},
+                )
+            )
+        ),
+    )
+    result = provider.search("search_reviews", {"data_id": "shop", "place_title": "Shop"})[0]
+    assert result.positive_price_review_snippets == []
+    assert result.negative_price_review_snippets == ["This shop was not affordable for me."]
+    assert result.price_evidence_score == 0
+
+
 def test_reviews_without_price_language_do_not_imply_affordability() -> None:
     provider = SerpResearch(
         "fake",
