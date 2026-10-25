@@ -1,9 +1,14 @@
+@import url("https://fonts.googleapis.com/css2?family=Faculty+Glyphic&family=Prata&display=swap");
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --cream: #fff3d8;
+  --blue: #4b5480;
+  --mint: #1fbfa7;
+  --ink: #1a2122;
+  --background: var(--cream);
+  --foreground: var(--ink);
 }
 
 @theme inline {
@@ -20,12 +25,34 @@ body {
   margin: 0;
 }
 
+.font-display { font-family: "Prata", Georgia, serif; }
+.font-brand { font-family: "Faculty Glyphic", Georgia, serif; }
+.graph-control {
+  border: 1px solid rgb(255 255 255 / 0.2);
+  border-radius: 999px;
+  padding: .55rem .9rem;
+  font-size: .78rem;
+  font-weight: 700;
+  color: rgb(255 255 255 / .8);
+  transition: background-color .2s ease, color .2s ease;
+}
+.graph-control:hover, .graph-control:focus-visible { background: #1fbfa7; color: #1a2122; outline: none; }
+.cascade-edge { transition: stroke-dashoffset 650ms cubic-bezier(.22,.72,.24,1), opacity 180ms ease; }
+.research-pulse { animation: research-scan 1.8s ease-in-out infinite; }
+@keyframes research-scan { 0% { transform: translateX(-110%); } 100% { transform: translateX(310%); } }
+.react-flow__controls { overflow: hidden; border: 1px solid rgb(255 255 255 / .16) !important; border-radius: .75rem !important; box-shadow: none !important; }
+.react-flow__controls-button { border: 0 !important; border-bottom: 1px solid rgb(255 255 255 / .12) !important; background: #4b5480 !important; fill: white !important; }
+
 button,
 input {
   font: inherit;
 }
 
 ::selection {
-  background: #fed7aa;
-  color: #0f172a;
+  background: #1fbfa7;
+  color: #1a2122;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }

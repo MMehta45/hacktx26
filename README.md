@@ -1,6 +1,8 @@
-# One Bad Tuesday
+# Breakingpoint
 
-One Bad Tuesday is a HackTX 2026 financial-resilience prototype. It provides an
+> One bad day shouldn’t become a bad month.
+
+Breakingpoint is a HackTX 2026 financial-resilience prototype. It provides an
 interactive four-stage shell, a normalized synthetic customer snapshot, a Capital One
 Nessie seed/read path, spending analysis, upcoming obligations and income, and a
 deterministic 30-day crisis simulator with an inspectable consequence graph. The Explore

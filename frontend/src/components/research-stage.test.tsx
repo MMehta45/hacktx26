@@ -19,17 +19,14 @@ const research = {
   tool_calls_used: 1, cache_hits: 0, warnings: [],
 } as unknown as ResearchResult;
 
-describe("Explore stage", () => {
-  it("renders evidence, unknown requirements, pending questions and recorded events", () => {
+describe("recovery preparation stage", () => {
+  it("collects commute context without exposing raw research results", () => {
     const html = renderToStaticMarkup(<ResearchStage research={research} loading={false} error={null} home="3810 N Lamar Blvd" work="525 N Lamar Blvd" shiftStart="08:00" shiftEnd="16:00" onContextChange={() => undefined} onRun={() => undefined} onBack={() => undefined} onNext={() => undefined} />);
-    expect(html).toContain("https://example.gov/resource");
-    expect(html).toContain("Eligibility requires confirmation");
-    expect(html).toContain("Are you eligible?");
-    expect(html).toContain("search_web returned one result");
-    expect(html).toContain("conditional");
-    expect(html).toContain("Cedarstone Services");
+    expect(html).toContain("Finding a way through");
+    expect(html).toContain("Find my way forward");
     expect(html).toContain('value="08:00"');
     expect(html).toContain('value="16:00"');
-    expect(html).not.toContain("bills saved");
+    expect(html).not.toContain("https://example.gov/resource");
+    expect(html).not.toContain("search_web returned one result");
   });
 });

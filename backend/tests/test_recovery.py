@@ -322,6 +322,19 @@ def test_possible_remote_work_does_not_become_approval(monkeypatch: pytest.Monke
     assert any(plan.feasibility == "conditional_pending_approval" for plan in updated.evaluation.plans)
 
 
+def test_initial_rent_outreach_is_personalized_but_has_no_financial_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _session(monkeypatch)
+    draft = next(item for item in session.outreach_drafts if item.kind == "bill_extension_request")
+    assert "[Property Manager's Name]" in draft.body
+    assert "$900.00" in draft.body
+    assert draft.body.endswith("Maya Rodriguez")
+    assert "action-rent-extension" not in {
+        action_id for plan in session.evaluation.plans for action_id in plan.action_ids
+    }
+
+
 def test_confirmed_remote_answers_change_feasibility_and_finances(monkeypatch: pytest.MonkeyPatch) -> None:
     session = _session(monkeypatch)
     for question_id in (

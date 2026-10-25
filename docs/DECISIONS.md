@@ -377,6 +377,40 @@ Identical targeted queries are cached, provider failures preserve existing evide
 answers, and unquantified research leads never enter plan arithmetic. Session storage is
 in-memory for the prototype; the browser retains only an opaque session ID.
 
+## M6 — Breakpoint interface and causal storytelling
+
+The public product name is **Breakpoint** while internal API routes and established data
+identifiers remain unchanged. The interface uses a deliberately small cream, blue, mint,
+and ink palette with Prata for editorial display text and Faculty Glyphic for brand labels.
+
+The crisis graph uses a deterministic dependency layout rather than stored pixel positions.
+Its reveal sequence is derived from projected edges: the root appears first, an SVG path
+traces to the next consequence, and only then does that node appear. Conditional and inactive
+branches remain visually distinct and are never animated as realized events. Reduced-motion
+users receive the complete graph immediately.
+
+Recovery strategies use a compact selector with one expanded plan at a time. This changes
+presentation only; the existing ranked plan order, financial engine, answers, resources,
+outreach drafts, and copy actions remain authoritative.
+
+## Final UX — Breakingpoint
+
+The final public name is **Breakingpoint**. Research remains a required data-producing step,
+but it is presented as a calm transition instead of a provider-results dashboard. Once the
+research response arrives, the frontend creates the same versioned recovery session and asks
+its prioritized questions one at a time. The plan view reuses that stored session, so no
+research evidence or answers are lost between screens.
+
+Unapproved outreach is presented as an action, not a financial outcome. A personalized rent
+request is available as a draft-only strategy before approval; it contributes no modeled
+benefit until the existing landlord-approval and exact-date requirements are satisfied.
+Remote-work drafts follow the same rule. Drafts are never sent by the application.
+
+The graph now waits until at least 35 percent of its container is visible before starting.
+Only projected dependencies participate in the realized cascade; conditional branches appear
+muted after the main sequence completes. Replay remains explicit, and reduced-motion users
+receive the completed graph without a drawn-out sequence.
+
 ## M4.1 — Recovery and provider-data corrections
 
 ### Advertise backend capabilities and classify recovery failures

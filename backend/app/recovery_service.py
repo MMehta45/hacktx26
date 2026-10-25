@@ -83,36 +83,44 @@ def _requirement(
     )
 
 
-def _remote_draft(shift_dates: list[date], *, inquiry: bool = False, equipment_confirmed: bool = False) -> OutreachDraft:
+def _remote_draft(shift_dates: list[date], *, sender_name: str, inquiry: bool = False, equipment_confirmed: bool = False) -> OutreachDraft:
     listed = ", ".join(value.strftime("%A, %B %-d") for value in shift_dates)
     return OutreachDraft(
         id="draft-remote-work",
         candidate_id="action-remote-work",
         kind="remote_work_request",
-        recipient="Maya's manager at Cedarstone Services",
+        recipient="[Manager's Name]",
         subject="Question about temporary remote-work options" if inquiry else "Temporary remote-work request",
         body=(
-            "Hello,\n\nMy vehicle is temporarily unavailable. "
-            + ("Could you let me know whether temporary remote work is permitted for " if inquiry else "Could I please work remotely on ")
-            + f"{listed}? I can remain available during my normal 08:00–16:00 shift and perform my usual responsibilities. "
-            + ("I have the required equipment and system access. " if equipment_confirmed else "Please let me know the equipment, system-access, and approval requirements. ")
-            + "Please let me know whether these dates can be approved and the appropriate next step.\n\nThank you,\nMaya"
+            "Hello [Manager's Name],\n\nI wanted to reach out about a temporary transportation issue. "
+            "My car is currently unavailable, and I am working to resolve it as quickly as I can. "
+            + ("Could you let me know whether temporary remote work is permitted for " if inquiry else "Would you consider approving temporary remote work for ")
+            + f"{listed}? My goal is to avoid any interruption to my schedule or responsibilities.\n\n"
+            "I would remain available throughout my normal 8:00 AM–4:00 PM shift and continue handling my usual work and communications. "
+            + ("I have the equipment and system access I need. " if equipment_confirmed else "Please let me know whether there are equipment, system-access, or security requirements I would need to arrange. ")
+            + "If remote work is not available, I would also appreciate discussing any shift adjustment that might help me keep these hours.\n\n"
+            "Thank you for considering this. Please let me know whether this could be possible and what next steps or approvals are needed.\n\n"
+            f"Best,\n{sender_name}"
         ),
     )
 
 
-def _bill_draft(name: str, due_date: date) -> OutreachDraft:
+def _bill_draft(name: str, due_date: date, amount_cents: int, *, sender_name: str) -> OutreachDraft:
     return OutreachDraft(
         id=f"draft-extension-{name.casefold().replace(' ', '-')}",
         candidate_id="action-rent-extension",
         kind="bill_extension_request",
-        recipient=f"{name} provider",
-        subject=f"Request to discuss the {name} due date",
+        recipient="[Property Manager's Name]",
+        subject=f"Request to discuss a short extension for {name}",
         body=(
-            f"Hello, I am writing before the {due_date:%B %-d} due date to ask whether a short "
-            "payment extension or arrangement is available. Please confirm any approved new due "
-            "date and fees in writing. I understand the obligation remains due unless we agree "
-            "otherwise. Thank you."
+            "Hello [Property Manager's Name],\n\n"
+            "I'm writing because a temporary transportation problem has caused an unexpected disruption to my work income. "
+            f"My {_money(amount_cents)} {name.lower()} payment is currently due on {due_date:%B %-d}, and I want to communicate early and make a responsible plan for the full amount.\n\n"
+            "Would [Company / Property Name] be willing to offer a short extension, grace period, or payment arrangement? "
+            "I am not asking for the balance to be waived. I am working to bridge the timing between this bill and my next available paycheck, and I would be grateful to understand what arrangements may be available.\n\n"
+            "If an arrangement is possible, please send the new due date, any fees, and the complete terms in writing so I can make sure I follow them correctly. "
+            "Thank you for your time and consideration.\n\n"
+            f"Sincerely,\n{sender_name}"
         ),
     )
 
@@ -950,6 +958,22 @@ def create_session(request: CreateRecoverySessionRequest, settings: Settings) ->
         pruned_combination_count=0,
         plans=[],
     )
+    rent = next(
+        (item for item in snapshot.upcoming_bills if item.category == "Housing/Rent"),
+        None,
+    )
+    initial_drafts = (
+        [
+            _bill_draft(
+                rent.name,
+                rent.due_date,
+                rent.amount_cents,
+                sender_name=request.scenario.display_name.strip(),
+            )
+        ]
+        if rent
+        else []
+    )
     public = RecoverySession(
         id=session_id,
         scenario_fingerprint=fingerprint,
@@ -964,7 +988,7 @@ def create_session(request: CreateRecoverySessionRequest, settings: Settings) ->
         candidate_actions=actions,
         questions=_base_questions(),
         next_question_ids=[],
-        outreach_drafts=[],
+        outreach_drafts=initial_drafts,
         evidence=request.research.evidence if request.research else [],
         research=request.research,
         financial_opportunities=analyze_financial_opportunities(snapshot),
@@ -1172,6 +1196,7 @@ def _activate_remote_draft(session: RecoverySession) -> None:
     possible = next((item for item in session.requirements if item.id == "remote_personally_possible"), None)
     draft = _remote_draft(
         dates,
+        sender_name=session.scenario.display_name,
         inquiry=possible is None or possible.status == "unknown",
         equipment_confirmed=equipment is not None and equipment.status == "user_reported_confirmed",
     )
@@ -1222,12 +1247,18 @@ def submit_answer(
         _set_requirement(session, "subscription_cancellation", "user_reported_confirmed" if yes else "unknown" if unresolved else "rejected", source="user_confirmation", established_by=answer.question_id)
     elif request.question_id == "question-rent-considered":
         _set_requirement(session, "rent_extension_approval", "pending_external_approval" if yes else "unknown" if unresolved else "rejected", source="user_answer", established_by=answer.question_id)
-        if yes:
+        if yes or unresolved:
             rent = next((item for item in stored.snapshot.upcoming_bills if item.category == "Housing/Rent"), None)
             if rent:
-                draft = _bill_draft(rent.name, rent.due_date)
+                draft = _bill_draft(rent.name, rent.due_date, rent.amount_cents, sender_name=session.scenario.display_name)
                 session.outreach_drafts = [item for item in session.outreach_drafts if item.id != draft.id]
                 session.outreach_drafts.append(draft)
+        else:
+            session.outreach_drafts = [
+                item
+                for item in session.outreach_drafts
+                if item.candidate_id != "action-rent-extension"
+            ]
     elif request.question_id == "question-rent-approved":
         _set_requirement(
             session,

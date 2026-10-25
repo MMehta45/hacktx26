@@ -27,12 +27,12 @@ function BalanceComparison({ simulation }: { simulation: CrisisSimulation }) {
     <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <p className="text-sm font-medium text-orange-600">30-day comparison</p>
+          <p className="font-brand text-sm text-[#4B5480]">30-day comparison</p>
           <h2 className="mt-1 text-2xl font-semibold text-slate-950">Normal vs untreated cash flow</h2>
         </div>
         <div className="flex gap-4 text-xs text-slate-600">
-          <span className="flex items-center gap-2"><i className="h-0.5 w-5 bg-emerald-500" />Normal</span>
-          <span className="flex items-center gap-2"><i className="h-0.5 w-5 bg-orange-500" />Crisis</span>
+          <span className="flex items-center gap-2"><i className="h-0.5 w-5 bg-[#1FBFA7]" />Normal</span>
+          <span className="flex items-center gap-2"><i className="h-0.5 w-5 bg-[#4B5480]" />Crisis</span>
         </div>
       </div>
       <div className="mt-5 rounded-2xl bg-slate-950 p-4">
@@ -43,9 +43,9 @@ function BalanceComparison({ simulation }: { simulation: CrisisSimulation }) {
           className="h-64 w-full"
           preserveAspectRatio="none"
         >
-          <line x1="0" x2="100" y1={zeroY} y2={zeroY} stroke="#fb7185" strokeWidth="0.7" strokeDasharray="2 2" />
-          <polyline points={coordinates("normal_balance_cents")} fill="none" stroke="#34d399" strokeWidth="2" vectorEffect="non-scaling-stroke" />
-          <polyline points={coordinates("crisis_balance_cents")} fill="none" stroke="#f97316" strokeWidth="2.4" vectorEffect="non-scaling-stroke" />
+          <line x1="0" x2="100" y1={zeroY} y2={zeroY} stroke="#FFF3D8" strokeWidth="0.7" strokeDasharray="2 2" />
+          <polyline points={coordinates("normal_balance_cents")} fill="none" stroke="#1FBFA7" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+          <polyline points={coordinates("crisis_balance_cents")} fill="none" stroke="#8f9ac9" strokeWidth="2.4" vectorEffect="non-scaling-stroke" />
         </svg>
         <div className="flex justify-between text-[10px] text-slate-400">
           <span>{formatDate(simulation.scenario.scenario_start_date)}</span>
@@ -54,13 +54,13 @@ function BalanceComparison({ simulation }: { simulation: CrisisSimulation }) {
         </div>
       </div>
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl bg-emerald-50 p-3">
-          <p className="text-xs text-emerald-700">Normal ending</p>
-          <p className="mt-1 font-semibold text-emerald-950">{formatCurrency(simulation.normal_ending_balance_cents)}</p>
+        <div className="rounded-xl bg-[#1FBFA7]/10 p-3">
+          <p className="text-xs text-[#4B5480]">Normal ending</p>
+          <p className="mt-1 font-semibold text-[#1A2122]">{formatCurrency(simulation.normal_ending_balance_cents)}</p>
         </div>
-        <div className="rounded-xl bg-orange-50 p-3">
-          <p className="text-xs text-orange-700">Raw crisis ending</p>
-          <p className="mt-1 font-semibold text-orange-950">{formatCurrency(simulation.crisis_ending_balance_cents)}</p>
+        <div className="rounded-xl bg-[#4B5480]/10 p-3">
+          <p className="text-xs text-[#4B5480]">Projected crisis ending</p>
+          <p className="mt-1 font-semibold text-[#1A2122]">{formatCurrency(simulation.crisis_ending_balance_cents)}</p>
         </div>
         <div className="rounded-xl bg-blue-50 p-3">
           <p className="text-xs text-blue-700">Constrained cash</p>
@@ -78,7 +78,7 @@ function BalanceComparison({ simulation }: { simulation: CrisisSimulation }) {
 function EventLedger({ simulation }: { simulation: CrisisSimulation }) {
   return (
     <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-      <p className="text-sm font-medium text-orange-600">Dated mechanics</p>
+      <p className="font-brand text-sm text-[#4B5480]">What changes, and when</p>
       <h2 className="mt-1 text-2xl font-semibold text-slate-950">Projection event ledger</h2>
       <div className="mt-5 max-h-[30rem] divide-y divide-slate-100 overflow-y-auto pr-1">
         {simulation.events.map((event) => (
@@ -89,7 +89,7 @@ function EventLedger({ simulation }: { simulation: CrisisSimulation }) {
                 {formatDate(event.date)} · {event.type.replaceAll("_", " ")} · {event.source.replaceAll("_", " ")}
               </p>
             </div>
-            <p className={`text-right font-semibold ${event.signed_amount_cents >= 0 ? "text-emerald-700" : "text-slate-950"}`}>
+            <p className={`text-right font-semibold ${event.signed_amount_cents >= 0 ? "text-[#1FBFA7]" : "text-slate-950"}`}>
               {event.signed_amount_cents >= 0 ? "+" : "−"}{formatCurrency(Math.abs(event.signed_amount_cents))}
             </p>
           </div>
@@ -103,7 +103,7 @@ function BankingContext({ snapshot }: { snapshot: CustomerSnapshot }) {
   return (
     <details className="rounded-3xl border border-slate-200 bg-white shadow-sm">
       <summary className="cursor-pointer list-none p-6">
-        <p className="text-sm font-medium text-orange-600">Preserved banking context</p>
+        <p className="font-brand text-sm text-[#4B5480]">Banking details</p>
         <div className="mt-1 flex items-center justify-between gap-4">
           <h2 className="text-2xl font-semibold text-slate-950">Accounts, spending, bills and history</h2>
           <span className="text-sm font-semibold text-slate-500">Open details ↓</span>
@@ -151,7 +151,7 @@ function BankingContext({ snapshot }: { snapshot: CustomerSnapshot }) {
               <div key={item.id} className="grid grid-cols-[1fr_auto] gap-4 py-3 sm:grid-cols-[1.2fr_0.8fr_auto]">
                 <div><p className="text-sm font-medium">{item.merchant_display ?? item.description ?? "Transaction"}</p><p className="mt-1 text-xs text-slate-500">{formatDate(item.date)} · {item.source.replaceAll("_", " ")}</p></div>
                 <p className="hidden text-xs text-slate-500 sm:block">{item.category}{item.recurring ? " · recurring" : ""}</p>
-                <p className={`text-right text-sm font-semibold ${item.direction === "credit" ? "text-emerald-700" : ""}`}>{item.direction === "credit" ? "+" : "−"}{formatCurrency(item.amount_cents)}</p>
+                <p className={`text-right text-sm font-semibold ${item.direction === "credit" ? "text-[#1FBFA7]" : ""}`}>{item.direction === "credit" ? "+" : "−"}{formatCurrency(item.amount_cents)}</p>
               </div>
             ))}
           </div>
@@ -164,11 +164,7 @@ function BankingContext({ snapshot }: { snapshot: CustomerSnapshot }) {
 export function CrisisStage({
   snapshot,
   simulation,
-  repairQuote,
-  loading,
   error,
-  onRepairChange,
-  onRerun,
   onBack,
   onNext,
 }: {
@@ -194,18 +190,14 @@ export function CrisisStage({
     <section className="py-8">
       <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
         <div>
-          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${live ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-900"}`}>
+          <span className={`inline-flex rounded-full border px-3 py-1 text-xs font-semibold ${live ? "border-[#1FBFA7]/30 bg-[#1FBFA7]/10 text-[#1A2122]" : "border-[#4B5480]/25 bg-[#4B5480]/10 text-[#4B5480]"}`}>
             {live ? "Live Nessie balance + projected crisis" : "Fixture balance + projected crisis"}
           </span>
-          <h1 className="mt-4 text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">The untreated next 30 days</h1>
-          <p className="mt-3 max-w-3xl text-slate-600">
-            A deterministic forecast beginning {formatDate(simulation.scenario.scenario_start_date)} in America/Chicago. Nothing here posts a payment, loan, or transaction.
-          </p>
-          <p className="mt-2 text-xs text-slate-500">
-            Banking snapshot retrieved {new Date(simulation.source.source_retrieved_at).toLocaleString()}.
-          </p>
+          <p className="font-brand mt-4 text-sm text-[#4B5480]">Stage 02 · The ripple effect</p>
+          <h1 className="font-display mt-2 text-4xl tracking-tight text-[#1A2122] sm:text-5xl">See what happens if nothing changes</h1>
+          <p className="mt-3 max-w-3xl text-[#4B5480]">Here&apos;s how Maya&apos;s finances could change over the next 30 days.</p>
         </div>
-        <button type="button" onClick={onBack} className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50">← Adjust starter inputs</button>
+        <button type="button" onClick={onBack} className="rounded-xl border border-[#4B5480]/25 bg-white/70 px-4 py-2.5 text-sm font-semibold text-[#4B5480] hover:bg-white">Edit situation</button>
       </div>
 
       <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
@@ -224,30 +216,23 @@ export function CrisisStage({
         ))}
       </div>
 
-      <div className="mt-6 rounded-3xl border border-orange-200 bg-orange-50 p-5">
-        <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
-          <div>
-            <div className="flex justify-between gap-4"><label htmlFor="rerun-repair" className="text-sm font-semibold text-orange-950">Repair exposure (still unpaid)</label><span className="font-semibold text-orange-950">{formatCurrency(repairQuote * 100)}</span></div>
-            <input id="rerun-repair" type="range" min="100" max="1500" step="50" value={repairQuote} onChange={(event) => onRepairChange(Number(event.target.value))} className="mt-3 w-full accent-orange-600" />
-          </div>
-          <button type="button" onClick={onRerun} disabled={loading} className="rounded-xl bg-orange-600 px-5 py-3 font-semibold text-white hover:bg-orange-700 disabled:bg-slate-300">{loading ? "Recalculating…" : "Rerun simulation"}</button>
-        </div>
-        <p className="mt-3 text-xs text-orange-800">Changes apply only when rerun. Historical Nessie records and the current account balance are never edited.</p>
-      </div>
-
       {error ? <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div> : null}
-      {simulation.warnings.length ? <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{simulation.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
+      {simulation.warnings.length ? <details className="mt-5 rounded-xl bg-[#4B5480]/10 p-4 text-sm text-[#4B5480]"><summary className="cursor-pointer font-semibold">Forecast notes</summary>{simulation.warnings.map((warning) => <p className="mt-2" key={warning}>{warning}</p>)}</details> : null}
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-2">
+      <div className="mt-8"><CrisisGraph simulation={simulation} /></div>
+
+      <details className="mt-6 rounded-3xl border border-[#4B5480]/15 bg-white/70">
+        <summary className="cursor-pointer list-none p-6"><div className="flex items-center justify-between gap-4"><div><p className="font-brand text-sm text-[#4B5480]">Behind the forecast</p><h2 className="font-display mt-1 text-2xl">Shifts, payroll and repair timing</h2></div><span className="text-sm font-semibold text-[#4B5480]">Open details ↓</span></div></summary>
+      <div className="grid gap-6 border-t border-[#4B5480]/10 p-6 xl:grid-cols-2">
         <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-medium text-orange-600">Derived employment timeline</p>
+          <p className="font-brand text-sm text-[#4B5480]">Your work calendar</p>
           <h2 className="mt-1 text-2xl font-semibold text-slate-950">Scheduled shifts</h2>
           <div className="mt-4 max-h-72 divide-y divide-slate-100 overflow-y-auto">
-            {simulation.shift_records.map((shift) => <div key={shift.id} className="flex items-center justify-between gap-4 py-3"><div><p className="text-sm font-semibold text-slate-900">{formatDate(shift.date)} · 08:00–16:00</p><p className="mt-1 text-xs text-slate-500">Paid {formatDate(shift.associated_payday)} · {shift.reason}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${shift.attendance === "worked" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{shift.attendance.replaceAll("_", " ")}</span></div>)}
+            {simulation.shift_records.map((shift) => <div key={shift.id} className="flex items-center justify-between gap-4 py-3"><div><p className="text-sm font-semibold text-slate-900">{formatDate(shift.date)} · 08:00–16:00</p><p className="mt-1 text-xs text-slate-500">Paid {formatDate(shift.associated_payday)} · {shift.reason}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${shift.attendance === "worked" ? "bg-[#1FBFA7]/10 text-[#1A2122]" : "bg-[#4B5480]/10 text-[#4B5480]"}`}>{shift.attendance.replaceAll("_", " ")}</span></div>)}
           </div>
         </article>
         <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-sm font-medium text-orange-600">One-week payroll lag</p>
+          <p className="font-brand text-sm text-[#4B5480]">When pay arrives</p>
           <h2 className="mt-1 text-2xl font-semibold text-slate-950">Friday paychecks</h2>
           <div className="mt-4 max-h-72 divide-y divide-slate-100 overflow-y-auto">
             {simulation.payroll_records.map((payroll) => <div key={payroll.id} className="py-3"><div className="flex justify-between gap-4"><p className="text-sm font-semibold text-slate-900">{formatDate(payroll.payday)}</p><p className="text-sm font-semibold text-slate-900">{formatCurrency(payroll.actual_projected_take_home_cents)}</p></div><p className="mt-1 text-xs text-slate-500">Work {formatDate(payroll.work_period_start)}–{formatDate(payroll.work_period_end)} · {payroll.worked_shift_count} worked / {payroll.missed_shift_count} missed · {formatCurrency(payroll.lost_take_home_cents)} lost</p></div>)}
@@ -255,8 +240,7 @@ export function CrisisStage({
           <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">Repair: {repair.funding_status.replaceAll("_", " ")}</p><p className="mt-1 text-xs leading-5 text-slate-500">{repair.blocked_reason ?? `${formatCurrency(repair.quote_cents)} is modeled once on ${formatDate(repair.modeled_payment_date!)} after protected bills.`}</p></div>
         </article>
       </div>
-
-      <div className="mt-6"><CrisisGraph simulation={simulation} /></div>
+      </details>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
         <BalanceComparison simulation={simulation} />

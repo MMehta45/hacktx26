@@ -40,11 +40,11 @@ describe("recovery plan", () => {
   it("labels contingent outcomes and shows recalculated before/after values", () => {
     const html = renderToStaticMarkup(<RecoveryPlanView plan={plan} baseline={baseline} busy={false} onConfirm={() => undefined} />);
     expect(html).toContain("Conditional");
-    expect(html).toContain("If manager approval succeeds");
     expect(html).toContain("The manager approves the listed dates");
-    expect(html).toContain("$900.00");
+    expect(html).toContain("Additional earnings");
     expect(html).toContain("$260.00");
-    expect(html).toContain("Confirm");
+    expect(html).toContain("Detailed financial view");
+    expect(html).not.toContain("WHAT MUST STILL HAPPEN");
     expect(html).not.toContain("guaranteed");
   });
 });

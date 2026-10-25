@@ -3,8 +3,8 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "One Bad Tuesday",
-  description: "HackTX 2026 project",
+  title: "Breakingpoint — Financial resilience",
+  description: "One bad day shouldn’t become a bad month.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
