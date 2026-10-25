@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -124,6 +124,7 @@ class SourceMetadata(ApiModel):
     simulation_data: Literal["seeded_synthetic", "local_fixture"]
     mode: Literal["live", "fixture"]
     message: str
+    retrieved_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class CashFlowEvent(ApiModel):

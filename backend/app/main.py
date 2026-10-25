@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.models import CustomerSnapshot
+from app.simulation import simulate
+from app.simulation_models import CrisisSimulationRequest, CrisisSimulationResponse
 from app.snapshot import SnapshotUnavailable, get_snapshot
 
 settings = get_settings()
@@ -14,7 +16,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_origin],
     allow_credentials=True,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -45,3 +47,24 @@ def customer_snapshot(
         )
     except SnapshotUnavailable as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@app.post("/api/simulations/crisis", response_model=CrisisSimulationResponse)
+def crisis_simulation(request: CrisisSimulationRequest) -> CrisisSimulationResponse:
+    """Refresh the read-only banking snapshot and simulate an untreated crisis."""
+
+    try:
+        snapshot = get_snapshot(
+            settings=settings,
+            display_name=request.display_name.strip(),
+            hourly_rate_cents=request.hourly_rate_cents,
+            repair_quote_cents=request.repair_quote_cents,
+        )
+        return CrisisSimulationResponse(
+            snapshot=snapshot,
+            simulation=simulate(snapshot, request, actions=[]),
+        )
+    except SnapshotUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error

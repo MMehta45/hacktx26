@@ -98,3 +98,44 @@ Transactions sharing a merchant are recurring when at least three dates have nea
 regular intervals, while housing, utilities, insurance, and subscription merchant groups
 are treated as naturally recurring once repeated. Unknown merchants fall back to Other;
 no AI categorization runs in this milestone.
+
+## M2 — Crisis simulation and consequence graph
+
+### Keep simulation pure and return its source snapshot
+
+`simulate(snapshot, scenario, actions=[])` consumes typed data and returns typed results
+without calling Nessie or mutating its input. The POST endpoint refreshes the read-only
+snapshot once, then returns that exact snapshot beside its simulation so the UI never
+mixes results from two banking reads. Nonempty recovery actions are rejected until their
+later milestone defines dated effects.
+
+### Separate raw funding need from payable cash
+
+The normal and crisis lines are unconstrained arithmetic forecasts, so a negative crisis
+line communicates required funding. An independent constrained ledger never overdrafts:
+it applies paychecks and wage reductions first, then allocates cash to essential bills
+before discretionary bills, using obligation ID for stable same-day ties. Partial funding
+is reported explicitly and unpaid amounts remain outstanding rather than being deducted.
+
+### Map absences through explicit pay-period coverage
+
+Affected shifts are explicit weekdays. Each maps to the existing forecast entry whose
+work-period start/end contains it; estimated lost take-home is capped at that paycheck's
+modeled take-home and posted only on its payday. Historical deposits are evidence only and
+are never rewritten.
+
+### Treat the graph as a status view, not an execution engine
+
+The backend owns all 14 stable problem nodes, 17 dependency edges, statuses, evidence,
+dates, and amounts. React Flow only lays out, animates, and inspects that returned graph.
+The repair quote is exposure; reserves deplete only with a dated payment. Transportation,
+borrowing, debt payments, and late fees remain inactive or conditional at their $0
+defaults.
+
+### Use a frozen snapshot date for reproducible demo scheduling
+
+The live account is retrieved at request time, but its forecast calendar remains anchored
+to the configured customer date and `America/Chicago`. The response carries both the
+source date and retrieval timestamp. Explicit scenario dates must match the loaded
+snapshot, preventing a caller from silently combining bills and pay periods from a
+different calendar.

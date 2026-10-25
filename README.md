@@ -3,8 +3,8 @@
 One Bad Tuesday is a HackTX 2026 financial-resilience prototype. It provides an
 interactive four-stage shell, a normalized synthetic customer snapshot, a Capital One
 Nessie seed/read path, spending analysis, upcoming obligations and income, and a
-deterministic 30-day cash-flow outlook. The problem graph, live research agent,
-questions, and recovery plans are previews only.
+deterministic 30-day crisis simulator with an inspectable consequence graph. Live
+research, questions, and recovery plans remain clearly disabled previews.
 
 ## Prerequisites
 
@@ -92,10 +92,33 @@ npm run dev
 - Frontend: <http://localhost:3000>
 - Backend health: <http://127.0.0.1:8000/health>
 - Snapshot API: <http://127.0.0.1:8000/api/customer/snapshot>
+- Crisis simulator: `POST http://127.0.0.1:8000/api/simulations/crisis`
 - FastAPI docs: <http://127.0.0.1:8000/docs>
 
 The browser calls same-origin Next.js routes, which forward to FastAPI. Backend secrets
 never enter browser code.
+
+## Demo the untreated crisis
+
+1. Open the frontend and confirm the starter card says **Live Nessie sandbox** (or read
+   the explicit fixture warning).
+2. Keep the default $20 hourly wage, $400 unpaid repair quote, and two missed shifts.
+3. Select **Simulate crisis**.
+4. Watch the problem-only graph reveal the missed-work chain, select nodes to inspect
+   evidence, and compare normal versus crisis balance lines.
+5. Review the event ledger and constrained **Projected bills at risk** section. Open the
+   banking context to retain access to accounts, categories, bills, and all 90-day
+   transactions.
+6. Change the repair quote or missed shifts and choose **Rerun simulation**. A quote alone
+   never changes the live balance or historical ledger.
+
+The default simulator uses the financial snapshot date in `America/Chicago`, five
+eight-hour weekday shifts, weekly paychecks, and an explicitly labeled 80% take-home
+estimate. Pay loss is applied to the paycheck covering each missed shift. Paychecks are
+processed first on a date; essential bills follow before discretionary bills, with ID as
+the stable same-day tie-breaker. Raw negative balances are funding requirements. A
+separate constrained ledger partially funds obligations only with cash available on the
+due date and reports the remainder as projected unpaid.
 
 To run services separately:
 
@@ -152,8 +175,9 @@ Run the complete suite:
 npm test
 ```
 
-This runs backend contract/normalization/arithmetic/idempotency tests, frontend wage-input
-tests, TypeScript, ESLint, and a production Next.js build. Backend lint is separate:
+This runs backend contract, normalization, simulator arithmetic, due-date allocation,
+graph, and idempotency tests; frontend wage and crisis-render tests; TypeScript; ESLint;
+and a production Next.js build. Backend lint is separate:
 
 ```bash
 npm run lint:backend
@@ -177,4 +201,4 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M1.md](docs/progress/M1.md) for actual milestone verification.
+[docs/progress/M2.md](docs/progress/M2.md) for actual milestone verification.

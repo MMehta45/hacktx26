@@ -101,5 +101,6 @@ export type CustomerSnapshot = {
     simulation_data: "seeded_synthetic" | "local_fixture";
     mode: DataMode;
     message: string;
+    retrieved_at: string;
   };
 };
