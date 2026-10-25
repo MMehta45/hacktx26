@@ -1,1 +1,8 @@
-m«ëˆ§½©buªàºg§µ¶œ‘éİş×¬¶ÏÜ¢wízËiÉKæÚ±î¸Ø[é¢Šwâ•ê(º×â•æÛ­æ¤n·š‘éÜ¡×¢ëiºÛ©Š{h–)Ş²‡åzx-†{¦×^r‡^uç(uè§¦ëa…éiv+)•¬­†+&zËè¢›­Šznµø¥y×Ÿjém~ŠìµØ§¢‹­¦ëhºÚnµø¥y×Ÿjém~ŠìµÚ.
+import os
+
+# Tests are deterministic and must never call optional external integrations merely
+# because a developer has configured their ignored local environment.
+os.environ["DEMO_DATA_MODE"] = "fixture"
+os.environ["NESSIE_API_KEY"] = ""
+os.environ["SERPAPI_API_KEY"] = ""
+os.environ["GEMINI_API_KEY"] = ""
