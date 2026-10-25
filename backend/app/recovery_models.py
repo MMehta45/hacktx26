@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import UTC, date, datetime
 from typing import Literal
 
@@ -5,7 +7,12 @@ from pydantic import Field, model_validator
 
 from app.models import ApiModel, CustomerSnapshot
 from app.research_models import Evidence, ResearchContext, ResearchResult
-from app.simulation_models import CrisisSimulationRequest, RecoveryEffect, SimulationResult
+from app.simulation_models import (
+    BillOutcome,
+    CrisisSimulationRequest,
+    RecoveryEffect,
+    SimulationResult,
+)
 
 RequirementStatus = Literal[
     "unknown",
@@ -110,6 +117,38 @@ class PlanSource(ApiModel):
     limitations: list[str]
 
 
+class PlanResource(ApiModel):
+    id: str
+    resource_type: Literal["external_link", "transit_route", "provider_contact", "assistance_program", "outreach_draft", "internal_action"]
+    title: str
+    action_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    url: str | None = None
+    resource_date: date | None = Field(default=None, validation_alias="date", serialization_alias="date")
+    details: str
+    limitations: list[str] = Field(default_factory=list)
+
+
+class PlanTimelineEvent(ApiModel):
+    event_date: date = Field(validation_alias="date", serialization_alias="date")
+    event_type: Literal["decision", "shift", "expense", "payday", "bill_due", "repair", "consequence"]
+    label: str
+    action_ids: list[str] = Field(default_factory=list)
+    conditional: bool = False
+
+
+class PlanReconciliation(ApiModel):
+    direct_recovered_shift_ids: list[str] = Field(default_factory=list)
+    indirect_recovered_shift_ids: list[str] = Field(default_factory=list)
+    remaining_missed_shift_ids: list[str] = Field(default_factory=list)
+    direct_income_preserved_cents: int = Field(default=0, ge=0)
+    indirect_income_preserved_cents: int = Field(default=0, ge=0)
+    total_income_preserved_cents: int = Field(default=0, ge=0)
+    payday_differences: dict[str, int] = Field(default_factory=dict)
+    unpaid_bills: list[BillOutcome] = Field(default_factory=list)
+    worst_gap_date: date | None = None
+
+
 class RecoveryPlan(ApiModel):
     id: str
     rank: int = Field(ge=1)
@@ -132,6 +171,10 @@ class RecoveryPlan(ApiModel):
     sources: list[PlanSource]
     outreach_drafts: list[OutreachDraft]
     next_steps: list[str]
+    resources: list[PlanResource] = Field(default_factory=list)
+    timeline: list[PlanTimelineEvent] = Field(default_factory=list)
+    reconciliation: PlanReconciliation = Field(default_factory=PlanReconciliation)
+    exclusion_reasons: list[str] = Field(default_factory=list)
 
 
 class RecoveryEvaluation(ApiModel):
@@ -240,7 +283,7 @@ class StoredRecoverySession(ApiModel):
     research: ResearchResult | None = None
 
     @model_validator(mode="after")
-    def matching_research(self) -> "StoredRecoverySession":
+    def matching_research(self) -> StoredRecoverySession:
         if self.research and self.public.research_run_id != self.research.run_id:
             raise ValueError("Stored research does not match the recovery session.")
         return self

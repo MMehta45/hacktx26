@@ -420,3 +420,12 @@ conditional opportunity, never cash that has already been saved.
 Willingness to request an extension creates only an unsent draft and pending status. A
 separate landlord-agreement answer unlocks a proposed date; only the dated agreement creates
 the bill-date effect, and that effect moves—not waives—the full obligation.
+
+## M4.3 — Actionable plan evidence and reconciliation
+
+Recovery plans now expose structured resources, timelines, and reconciliation alongside the
+simulator result. Evidence-linked resources are filtered to selected actions; private
+approvals use unsent outreach drafts rather than invented public URLs. Direct preserved
+shifts are separated from later shifts restored by earlier repair, while payday deltas come
+from rerun payroll records. Scheduled bill outcomes remain the source of truth for unpaid
+essentials, so a later ending-balance improvement cannot imply an earlier bill was funded.

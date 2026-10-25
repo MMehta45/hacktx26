@@ -15,7 +15,10 @@ from app.recovery_models import (
     EvaluateRecoveryRequest,
     OutreachDraft,
     PlanDelta,
+    PlanReconciliation,
+    PlanResource,
     PlanSource,
+    PlanTimelineEvent,
     RecoveryActionDefinition,
     RecoveryAnswer,
     RecoveryEvaluation,
@@ -403,7 +406,10 @@ def _initial_actions(
                     id=action_id,
                     title=candidate.title,
                     strategy=strategy,  # type: ignore[arg-type]
-                    description=f"Research lead only: {candidate.description}",
+                    description=(
+                        f"Research lead only: {candidate.description} "
+                        f"Missing before simulation: {', '.join(candidate.remaining_unknowns) or 'a dated executable effect'}."
+                    ),
                     effects=[],
                     evidence_ids=candidate.evidence_ids,
                     next_steps=["Run targeted research or obtain the missing confirmation before quantifying this option."],
@@ -459,6 +465,61 @@ def _incremental_cost(effects: list[RecoveryEffect]) -> int:
         elif isinstance(effect, BillDueDateEffect):
             total += effect.fee_cents
     return total
+
+
+def _plan_details(selected, action_ids, baseline, result, evidence, drafts):
+    resources: list[PlanResource] = []
+    for action in selected:
+        for evidence_id in action.evidence_ids:
+            item = evidence.get(evidence_id)
+            if not item:
+                continue
+            resource_type = "transit_route" if item.source_type == "transit_directions" else "external_link"
+            details = item.title
+            if item.source_type == "transit_directions":
+                routes = ", ".join(item.route_numbers) or "route unknown"
+                details = f"{routes}; fare {item.observed_cost_cents or 0} cents; {item.transit_duration_minutes or '?'} minutes"
+            resources.append(PlanResource(
+                id=f"resource:{action.id}:{item.id}", resource_type=resource_type,
+                title=item.title, action_ids=[action.id], evidence_ids=[item.id], url=item.url,
+                date=item.transit_request_date, details=details, limitations=item.limitations,
+            ))
+    for action in selected:
+        if action.id in drafts:
+            draft = drafts[action.id]
+            resources.append(PlanResource(
+                id=f"resource:draft:{draft.id}", resource_type="outreach_draft",
+                title=draft.subject, action_ids=[action.id], details="Copyable draft; not sent or approved.",
+                limitations=[draft.disclaimer],
+            ))
+    direct = sorted({shift_id for action in selected for effect in action.effects if isinstance(effect, PreserveShiftEffect) for shift_id in effect.shift_ids})
+    baseline_missed = {item.id for item in baseline.shift_records if item.attendance == "projected_missed"}
+    worked_after = {item.id for item in result.shift_records if item.attendance == "worked"}
+    recovered = baseline_missed & worked_after
+    indirect = sorted(recovered - set(direct))
+    remaining = sorted(baseline_missed - recovered)
+    before_pay = {item.payday: item.actual_projected_take_home_cents for item in baseline.payroll_records}
+    after_pay = {item.payday: item.actual_projected_take_home_cents for item in result.payroll_records}
+    payday_differences = {str(day): after_pay[day] - before_pay.get(day, 0) for day in after_pay if after_pay[day] != before_pay.get(day, 0)}
+    direct_pay = sum(item.take_home_earning_potential_cents for item in baseline.shift_records if item.id in direct)
+    total_pay = sum(payday_differences.values())
+    timeline: list[PlanTimelineEvent] = [PlanTimelineEvent(date=baseline.scenario.scenario_start_date, event_type="decision", label="Review this recovery plan", action_ids=list(action_ids))]
+    for shift in result.shift_records:
+        if shift.id in recovered:
+            timeline.append(PlanTimelineEvent(date=shift.date, event_type="shift", label=f"Shift protected/restored ({shift.date:%b %-d})", action_ids=list(action_ids)))
+    for event in result.events:
+        if event.type in {"paycheck", "bill_due", "repair_payment", "action_expense"}:
+            event_type = "payday" if event.type == "paycheck" else "bill_due" if event.type == "bill_due" else "repair" if event.type == "repair_payment" else "expense"
+            timeline.append(PlanTimelineEvent(date=event.date, event_type=event_type, label=event.description, action_ids=list(action_ids)))
+    timeline.sort(key=lambda item: (item.event_date, item.event_type, item.label))
+    gap = min(result.cashflow, key=lambda point: point.crisis_balance_cents, default=None)
+    return resources, timeline, PlanReconciliation(
+        direct_recovered_shift_ids=sorted(set(direct) & recovered), indirect_recovered_shift_ids=indirect,
+        remaining_missed_shift_ids=remaining, direct_income_preserved_cents=max(0, direct_pay),
+        indirect_income_preserved_cents=max(0, total_pay - direct_pay), total_income_preserved_cents=max(0, total_pay),
+        payday_differences=payday_differences, unpaid_bills=result.unpaid_bills,
+        worst_gap_date=gap.date if gap else None,
+    )
 
 
 def _evaluate(
@@ -544,6 +605,9 @@ def _evaluate(
             ]
             conditions = [requirements[item].condition for item in unresolved if item in requirements]
             labels = list(dict.fromkeys(action.strategy for action in selected))
+            resources, timeline, reconciliation = _plan_details(
+                selected, action_ids, baseline, result, evidence, drafts
+            )
             plan_id = "plan-" + hashlib.sha256(
                 f"{session.scenario_fingerprint}|{'|'.join(action_ids)}".encode()
             ).hexdigest()[:12]
@@ -579,6 +643,9 @@ def _evaluate(
                 sources=plan_sources,
                 outreach_drafts=[drafts[item] for item in action_ids if item in drafts],
                 next_steps=list(dict.fromkeys(step for action in selected for step in action.next_steps)),
+                resources=resources,
+                timeline=timeline,
+                reconciliation=reconciliation,
             )
             feasibility_order = {
                 "ready_with_confirmed_conditions": 0,
