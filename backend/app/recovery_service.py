@@ -137,15 +137,6 @@ def _base_questions() -> list[RecoveryQuestion]:
             priority_score=27,
         ),
         RecoveryQuestion(
-            id="question-transit-usable",
-            prompt="Would you be able to take Route 5 to work on the listed days?",
-            answer_type="yes_no",
-            reason="The Route 5 schedule and fare are a synthetic demo assumption; Maya's personal ability to use it remains separate.",
-            requirement_ids=["transit_personally_usable"],
-            candidate_ids=["action-transit-route-5"],
-            priority_score=26,
-        ),
-        RecoveryQuestion(
             id="question-rent-considered",
             prompt="Would you be willing to ask the landlord for a short rent extension?",
             answer_type="yes_no",
@@ -292,13 +283,14 @@ def _transit_actions(
         )
         action_id = f"action-transit-{shift.date.isoformat()}"
         requirement_id = "transit_personally_usable"
-        requirements.append(
-            _requirement(
-                requirement_id,
-                action_id,
-                "Maya reports that she can use this Route 5 itinerary.",
+        if not is_demo_assumption:
+            requirements.append(
+                _requirement(
+                    requirement_id,
+                    action_id,
+                    "The transit itinerary is usable for the affected shift.",
+                )
             )
-        )
         total = sum(value or 0 for value in costs)
         actions.append(
             RecoveryActionDefinition(
@@ -311,7 +303,7 @@ def _transit_actions(
                 strategy="transportation",
                 description=(
                     "Synthetic demo assumption: Route 5 departs 07:35, arrives near work at 07:52, and has a 16:17 return departure. "
-                    "The $2.50 round trip is modeled only if Maya confirms she can use it."
+                    "The $2.50 round trip is modeled for the configured Maya commute."
                     if is_demo_assumption
                     else "Provider-backed outbound and return timing covers this exact shift; personal usability remains unconfirmed."
                 ),
@@ -320,7 +312,7 @@ def _transit_actions(
                         effect_id=f"effect-transit-shift-{shift.date.isoformat()}",
                         action_id=action_id,
                         shift_ids=[shift.id],
-                        requirement_ids=[requirement_id],
+                        requirement_ids=[] if is_demo_assumption else [requirement_id],
                         evidence_ids=[outbound.id, returning.id],
                         certainty="conditional" if is_demo_assumption else "provider_observed",
                     ),
@@ -337,15 +329,15 @@ def _transit_actions(
                         ),
                         supported_shift_ids=[shift.id],
                         charge_only_when_needed_for_supported_shift=True,
-                        requirement_ids=[requirement_id],
+                        requirement_ids=[] if is_demo_assumption else [requirement_id],
                         evidence_ids=[outbound.id, returning.id],
                         certainty="conditional" if is_demo_assumption else "provider_observed",
                     ),
                 ],
-                requirement_ids=[requirement_id],
+                requirement_ids=[] if is_demo_assumption else [requirement_id],
                 evidence_ids=[outbound.id, returning.id],
                 next_steps=(
-                    ["Confirm personal ability to use Route 5.", "Use the linked map only as a manual navigation aid; recheck service before travel."]
+                    ["Use the linked map as a navigation aid and recheck service before travel."]
                     if is_demo_assumption
                     else ["Confirm personal ability to use this itinerary.", "Recheck service alerts before travel."]
                 ),
@@ -371,21 +363,16 @@ def _transit_actions(
                 "and has a 16:17 return departure. Each used round trip costs $2.50. "
                 "Fares stop after repair and are skipped on remote-work days."
             ),
-            effects=[effect.model_copy(update={"action_id": action_id}) for effect in demo_effects],
-            requirement_ids=["transit_personally_usable"],
+            effects=[effect.model_copy(update={"action_id": action_id, "requirement_ids": []}) for effect in demo_effects],
+            requirement_ids=[],
             evidence_ids=demo_evidence_ids,
             next_steps=[
-                "Confirm personal ability to use Route 5 on the listed weekday shifts.",
                 "Use Route 5 only while the vehicle remains unavailable.",
                 "Map links are navigation aids; the schedule and fare are demo assumptions.",
             ],
             evidence_status="demo_scenario_assumption",
         ))
-        requirements = [
-            requirement.model_copy(update={"candidate_ids": [action_id]})
-            if requirement.id == "transit_personally_usable" else requirement
-            for requirement in requirements
-        ]
+        requirements = [requirement for requirement in requirements if requirement.id != "transit_personally_usable"]
 
     deduped: dict[str, RecoveryRequirement] = {}
     for requirement in requirements:
@@ -1230,14 +1217,6 @@ def submit_answer(
             _activate_remote_draft(session)
     elif request.question_id == "question-remote-equipment":
         _set_requirement(session, "remote_equipment", "user_reported_confirmed" if yes else "unknown" if unresolved else "rejected", source="user_confirmation", established_by=answer.question_id)
-    elif request.question_id == "question-transit-usable":
-        _set_requirement(
-            session,
-            "transit_personally_usable",
-            "possible" if yes else "unknown" if unresolved else "rejected",
-            source="user_answer",
-            established_by=answer.question_id,
-        )
     elif request.question_id == "question-remote-approved":
         action = next(item for item in session.candidate_actions if item.id == "action-remote-work")
         effect = next(item for item in action.effects if isinstance(item, PreserveShiftEffect))

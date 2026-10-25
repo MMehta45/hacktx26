@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { CrisisStage } from "@/components/crisis-stage";
 import { ResearchStage } from "@/components/research-stage";
@@ -16,7 +16,7 @@ import { AUSTIN_DEMO_CONTEXT, filterUnsupportedMechanicRecommendations, research
 import type { CustomerSnapshot } from "@/types/customer";
 import type { CrisisSimulation, CrisisSimulationResponse } from "@/types/simulation";
 import type { ResearchResponse, ResearchResult } from "@/types/research";
-import type { CreateRecoverySessionBody } from "@/types/recovery";
+import type { CreateRecoverySessionBody, RecoverySession } from "@/types/recovery";
 
 type Stage = 1 | 2 | 3 | 4;
 type RequestState = { kind: "idle" } | { kind: "loading" } | { kind: "error"; message: string };
@@ -127,7 +127,9 @@ export default function ScenarioApp() {
   const [simulation, setSimulation] = useState<CrisisSimulation | null>(null);
   const [requestState, setRequestState] = useState<RequestState>({ kind: "idle" });
   const [research, setResearch] = useState<ResearchResult | null>(null);
+  const [recoverySession, setRecoverySession] = useState<RecoverySession | null>(null);
   const [researchState, setResearchState] = useState<RequestState>({ kind: "idle" });
+  const researchRequestId = useRef(0);
   const [routeContext, setRouteContext] = useState({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd });
   const snapshotQuery = useMemo(() => new URLSearchParams({ display_name: "Maya Rodriguez", hourly_rate_cents: "2000", repair_quote_cents: "40000" }), []);
   const recoveryRequest = useMemo<CreateRecoverySessionBody | null>(() => {
@@ -159,6 +161,7 @@ export default function ScenarioApp() {
     if (hourlyRateCents === null || !name.trim()) return;
     setRequestState({ kind: "loading" });
     setResearch(null);
+    setRecoverySession(null);
     try {
       const response = await fetch("/api/simulations/crisis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, breakdown_date: breakdownDate }) });
       const body = (await response.json()) as CrisisSimulationResponse | { message?: string };
@@ -176,39 +179,57 @@ export default function ScenarioApp() {
   async function runResearch(force: boolean) {
     const hourlyRateCents = wageInputToCents(hourlyWage);
     if (hourlyRateCents === null || !simulation) return;
+    const requestId = ++researchRequestId.current;
     setResearchState({ kind: "loading" });
     try {
       const response = await fetch("/api/research/interventions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(researchRequestBody({ displayName: name.trim(), hourlyRateCents, repairQuoteCents: repairQuote * 100, breakdownDate }, routeContext, force)) });
       const body = (await response.json()) as ResearchResponse | { message?: string };
       if (!response.ok) throw new Error("message" in body && body.message ? body.message : "Research request failed.");
       const result = body as ResearchResponse;
+      const filteredResearch = filterUnsupportedMechanicRecommendations(result.research);
+      const sessionRequest: CreateRecoverySessionBody = {
+        scenario: { display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, breakdown_date: breakdownDate },
+        research: filteredResearch,
+        context: { city: AUSTIN_DEMO_CONTEXT.city, home_location: routeContext.home, work_location: routeContext.work, shift_start_local: routeContext.shiftStart, shift_end_local: routeContext.shiftEnd, timezone: AUSTIN_DEMO_CONTEXT.timezone },
+      };
+      const sessionResponse = await fetch("/api/recovery/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sessionRequest) });
+      const sessionBody = (await sessionResponse.json()) as RecoverySession | { message?: string };
+      if (!sessionResponse.ok) throw new Error("message" in sessionBody && sessionBody.message ? sessionBody.message : "Recovery setup failed.");
+      if (requestId !== researchRequestId.current) return;
       setSnapshot(result.snapshot);
       setSimulation(result.simulation);
-      setResearch(filterUnsupportedMechanicRecommendations(result.research));
+      setRecoverySession(sessionBody as RecoverySession);
+      setResearch(filteredResearch);
       setResearchState({ kind: "idle" });
     } catch (error) {
-      setResearchState({ kind: "error", message: error instanceof Error ? error.message : "Research request failed." });
+      if (requestId === researchRequestId.current) setResearchState({ kind: "error", message: error instanceof Error ? error.message : "Research request failed." });
     }
   }
 
   function changeRouteContext(field: "home" | "work" | "shiftStart" | "shiftEnd", value: string) {
     setRouteContext((previous) => ({ ...previous, [field]: value }));
     setResearch(null);
+    setRecoverySession(null);
   }
 
   function restart() {
-    setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setBreakdownDate(todayInChicago()); setSimulation(null); setResearch(null); setRouteContext({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd }); setRequestState({ kind: "idle" }); setStage(1);
+    researchRequestId.current += 1; setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setBreakdownDate(todayInChicago()); setSimulation(null); setResearch(null); setRecoverySession(null); setRouteContext({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd }); setRequestState({ kind: "idle" }); setStage(1);
+  }
+
+  function navigate(stageId: Stage) {
+    if (stage === 3 && stageId !== 3 && researchState.kind === "loading") { researchRequestId.current += 1; setResearchState({ kind: "idle" }); }
+    setStage(stageId);
   }
 
   return (
     <main className="min-h-screen bg-[#FFF3D8] text-[#1A2122]">
-      <header className="sticky top-0 z-50 border-b border-[#4B5480]/10 bg-[#FFF3D8]/90 backdrop-blur-xl"><div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between"><button type="button" onClick={() => setStage(1)} className="w-fit text-left"><span className="block font-brand text-[10px] uppercase tracking-[0.2em] text-[#4B5480]">HackTX 2026</span><span className="font-display mt-1 block text-xl tracking-tight">Breakingpoint</span></button><StageNavigation current={stage} simulation={simulation} hasResearch={Boolean(research)} onNavigate={setStage} /></div></header>
+      <header className="sticky top-0 z-50 border-b border-[#4B5480]/10 bg-[#FFF3D8]/90 backdrop-blur-xl"><div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between"><button type="button" onClick={() => navigate(1)} className="w-fit text-left"><span className="block font-brand text-[10px] uppercase tracking-[0.2em] text-[#4B5480]">HackTX 2026</span><span className="font-display mt-1 block text-xl tracking-tight">Breakingpoint</span></button><StageNavigation current={stage} simulation={simulation} hasResearch={Boolean(research)} onNavigate={navigate} /></div></header>
       <div className="mx-auto max-w-7xl px-5 sm:px-8">
         {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} breakdownDate={breakdownDate} snapshot={snapshot} requestState={requestState} onNameChange={(value) => { setName(value); setResearch(null); }} onWageChange={(value) => { setHourlyWage(value); setResearch(null); }} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onBreakdownDateChange={(value) => { setBreakdownDate(value); setResearch(null); }} onSubmit={() => void runSimulation()} /> : null}
         {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
         {stage === 3 && simulation && !research ? <ResearchStage research={research} loading={researchState.kind === "loading"} error={researchState.kind === "error" ? researchState.message : null} home={routeContext.home} work={routeContext.work} shiftStart={routeContext.shiftStart} shiftEnd={routeContext.shiftEnd} onContextChange={changeRouteContext} onRun={(force) => void runResearch(force)} onBack={() => setStage(2)} onNext={() => setStage(4)} /> : null}
-        {stage === 3 && simulation && research && recoveryRequest ? <RecoveryStage mode="questions" request={recoveryRequest} research={research} onBack={() => setStage(2)} onAdjust={() => setStage(1)} onRestart={restart} onContinue={() => setStage(4)} /> : null}
-        {stage === 4 && simulation && recoveryRequest ? <RecoveryStage mode="plans" request={recoveryRequest} research={research} onBack={() => setStage(3)} onAdjust={() => setStage(1)} onRestart={restart} /> : null}
+        {stage === 3 && simulation && research && recoveryRequest && recoverySession ? <RecoveryStage mode="questions" request={recoveryRequest} research={research} initialSession={recoverySession} onSessionChange={setRecoverySession} onBack={() => navigate(2)} onAdjust={() => navigate(1)} onRestart={restart} onContinue={() => navigate(4)} /> : null}
+        {stage === 4 && simulation && recoveryRequest && recoverySession ? <RecoveryStage mode="plans" request={recoveryRequest} research={research} initialSession={recoverySession} onSessionChange={setRecoverySession} onBack={() => navigate(3)} onAdjust={() => navigate(1)} onRestart={restart} /> : null}
       </div>
       <footer className="border-t border-[#4B5480]/15 px-5 py-6 text-center text-xs leading-5 text-[#1A2122]/55"><span className="font-display mr-2 text-[#1A2122]">Breakingpoint.</span> One bad day shouldn&apos;t become a bad month.</footer>
     </main>

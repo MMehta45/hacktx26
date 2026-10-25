@@ -85,9 +85,10 @@ def test_demo_route_5_is_quantified_and_only_charged_when_it_is_used() -> None:
     evidence = maya_route_5_fixture("Maya Rodriguez", ResearchContext(), baseline)
     actions, requirements = _transit_actions(baseline, evidence)
     assert evidence and all(item.fare_certainty == "demo_scenario_assumption" for item in evidence)
-    assert actions and requirements[0].id == "transit_personally_usable"
+    assert actions and requirements == []
     route_5 = actions[0]
     assert route_5.evidence_status == "demo_scenario_assumption"
+    assert route_5.requirement_ids == []
     transit_expenses = [effect for effect in route_5.effects if isinstance(effect, ExpenseEffect)]
     transit_shifts = [effect for effect in route_5.effects if isinstance(effect, PreserveShiftEffect)]
     assert len(transit_expenses) == len(transit_shifts) > 1
@@ -148,6 +149,9 @@ def test_ranked_plans_retain_a_quantified_transportation_option(
     )
     route = [item for item in session.candidate_actions if item.strategy == "transportation"]
     assert route and all(item.quantified for item in route)
+    assert "question-transit-usable" not in {item.id for item in session.questions}
+    assert "question-transit-usable" not in session.next_question_ids
+    assert all(not item.requirement_ids for item in route)
     categories = {tuple(sorted(plan.strategy_labels)) for plan in session.evaluation.plans}
     assert ("transportation",) in categories
     assert ("income_preservation",) in categories
