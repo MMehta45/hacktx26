@@ -308,8 +308,9 @@ def income_projection(anchor: date, hourly_rate_cents: int) -> IncomeProjection:
                 expected_payment_date=pay_date,
                 gross_amount_cents=gross_weekly_cents,
                 estimated_take_home_cents=estimated_net_weekly_cents,
-                work_period_start=pay_date - timedelta(days=7),
-                work_period_end=pay_date - timedelta(days=1),
+                # Monday-Sunday work is paid on Friday of the following week.
+                work_period_start=pay_date - timedelta(days=11),
+                work_period_end=pay_date - timedelta(days=5),
             )
             for pay_date in pay_dates
             if pay_date <= anchor + timedelta(days=30)

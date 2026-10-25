@@ -21,7 +21,7 @@ export function researchRequestBody(
     displayName: string;
     hourlyRateCents: number;
     repairQuoteCents: number;
-    affectedShiftCount: number;
+    breakdownDate: string;
   },
   route: RouteContext,
   forceRefresh: boolean,
@@ -31,7 +31,7 @@ export function researchRequestBody(
       display_name: scenario.displayName,
       hourly_rate_cents: scenario.hourlyRateCents,
       repair_quote_cents: scenario.repairQuoteCents,
-      affected_shift_count: scenario.affectedShiftCount,
+      breakdown_date: scenario.breakdownDate,
     },
     context: {
       city: AUSTIN_DEMO_CONTEXT.city,

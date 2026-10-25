@@ -44,6 +44,16 @@ def test_fixture_category_totals_and_wage_math_reconcile() -> None:
     assert snapshot.income_projection.estimated_net_weekly_cents == 69_600
     assert snapshot.scenario.repair_quote_cents == 55_000
     assert len(snapshot.income_projection.forecast_entries) == 4
+    first_pay = snapshot.income_projection.forecast_entries[0]
+    assert first_pay.expected_payment_date == date(2026, 10, 30)
+    assert first_pay.work_period_start == date(2026, 10, 19)
+    assert first_pay.work_period_end == date(2026, 10, 25)
+    payroll_dates = [
+        transaction.date
+        for transaction in snapshot.history.transactions
+        if transaction.source == "fixture_deposit"
+    ]
+    assert payroll_dates and all(value.weekday() == 4 for value in payroll_dates)
     assert snapshot.cash_flow.starting_balance_cents == 31_000
     assert snapshot.cash_flow.minimum_balance_cents == -18_900
     assert snapshot.cash_flow.peak_cash_shortfall_cents == 18_900

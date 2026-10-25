@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { backendErrorMessage } from "@/lib/api-error";
+
 const backendUrl = process.env.BACKEND_URL ?? "http://127.0.0.1:8000";
 
 export async function POST(request: Request) {
@@ -14,8 +16,7 @@ export async function POST(request: Request) {
     });
     const body = (await response.json()) as unknown;
     if (!response.ok) {
-      const detail = typeof body === "object" && body !== null && "detail" in body ? String(body.detail) : `Backend returned ${response.status}`;
-      return NextResponse.json({ message: detail }, { status: response.status });
+      return NextResponse.json({ message: backendErrorMessage(body, response.status) }, { status: response.status });
     }
     return NextResponse.json(body);
   } catch {

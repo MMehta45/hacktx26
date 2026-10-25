@@ -1,22 +1,20 @@
-from datetime import date
+from datetime import date, time
 
 from fastapi.testclient import TestClient
 
 from app.fixtures import fixture_snapshot
 from app.main import app
-from app.models import Account, ForecastIncome, IncomeProjection, UpcomingBill
-from app.simulation import simulate
+from app.models import Account, SourceMetadata, UpcomingBill
+from app.simulation import payday_for_shift, simulate
 from app.simulation_models import CrisisSimulationRequest
 
 ANCHOR = date(2026, 10, 24)
-PAYDAY = date(2026, 10, 30)
+BREAKDOWN = date(2026, 10, 26)
+FIRST_PAYDAY = date(2026, 10, 30)
 
 
 def example_snapshot(
-    *,
-    balance_cents: int = 31_000,
-    bills: list[UpcomingBill] | None = None,
-    include_paycheck: bool = True,
+    *, balance_cents: int = 31_000, bills: list[UpcomingBill] | None = None, **_: object
 ):
     snapshot = fixture_snapshot(
         anchor=ANCHOR,
@@ -24,28 +22,6 @@ def example_snapshot(
         hourly_rate_cents=2_000,
         repair_quote_cents=40_000,
         message="test fixture",
-    )
-    entries = (
-        [
-            ForecastIncome(
-                expected_payment_date=PAYDAY,
-                gross_amount_cents=80_000,
-                estimated_take_home_cents=64_000,
-                work_period_start=date(2026, 10, 23),
-                work_period_end=date(2026, 10, 29),
-            )
-        ]
-        if include_paycheck
-        else []
-    )
-    income = IncomeProjection(
-        hourly_rate_cents=2_000,
-        gross_per_shift_cents=16_000,
-        gross_weekly_cents=80_000,
-        estimated_net_per_shift_cents=12_800,
-        estimated_net_weekly_cents=64_000,
-        next_pay_dates=[entry.expected_payment_date for entry in entries],
-        forecast_entries=entries,
     )
     return snapshot.model_copy(
         update={
@@ -59,7 +35,6 @@ def example_snapshot(
                 )
             ],
             "upcoming_bills": bills or [],
-            "income_projection": income,
         }
     )
 
@@ -86,71 +61,177 @@ def bill(
 
 def default_request(**updates: object) -> CrisisSimulationRequest:
     values: dict[str, object] = {
-        "scenario_start_date": ANCHOR,
+        "breakdown_date": BREAKDOWN,
         "forecast_horizon_days": 7,
     }
     values.update(updates)
     return CrisisSimulationRequest(**values)
 
 
-def test_required_numeric_example_and_correct_payday() -> None:
-    snapshot = example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))])
+def test_weekly_friday_payroll_has_one_week_lag() -> None:
+    result = simulate(example_snapshot(), default_request())
 
-    result = simulate(snapshot, default_request())
-
-    assert result.source.current_balance_cents == 31_000
-    assert result.normal_ending_balance_cents == 5_000
-    assert result.crisis_ending_balance_cents == -20_600
-    assert result.peak_funding_gap_cents == 20_600
-    assert result.unpaid_essential_total_cents == 20_600
-    assert result.constrained_ending_cash_cents == 0
-    assert result.income_lost_by_payday[0].payday == PAYDAY
-    assert result.income_lost_by_payday[0].take_home_lost_cents == 25_600
-    assert result.income_lost_by_payday[0].crisis_take_home_cents == 38_400
-    assert next(item for item in result.events if item.type == "lost_wages").date == PAYDAY
+    first = result.payroll_records[0]
+    assert (first.work_period_start, first.work_period_end, first.payday) == (
+        date(2026, 10, 19),
+        date(2026, 10, 25),
+        FIRST_PAYDAY,
+    )
+    assert payday_for_shift(date(2026, 10, 26)) == date(2026, 11, 6)
 
 
-def test_unpaid_quote_and_zero_cost_branches_do_not_debit_cash() -> None:
-    snapshot = example_snapshot()
+def test_previous_week_paycheck_is_unchanged_by_breakdown() -> None:
+    result = simulate(example_snapshot(), default_request())
 
-    result = simulate(snapshot, default_request(repair_quote_cents=40_000))
+    payroll = result.payroll_records[0]
+    assert payroll.reliability == "already_earned"
+    assert payroll.actual_projected_take_home_cents == 64_000
+    assert payroll.lost_take_home_cents == 0
 
-    assert not any(item.type == "repair_payment" for item in result.events)
-    assert not any(item.type == "transport_cost" for item in result.events)
-    assert not any(item.type == "borrowing" for item in result.events)
-    nodes = {item.id: item for item in result.graph_nodes}
-    assert nodes["unexpected_repair_expense"].amount_cents == 40_000
-    assert nodes["cash_reserves_depleted"].status == "inactive"
-    assert nodes["extra_transportation_costs"].status == "inactive"
-    assert nodes["emergency_borrowing"].status == "conditional"
-    assert result.source.current_balance_cents == 31_000
+
+def test_weekday_shifts_are_generated_and_linked_to_payday() -> None:
+    result = simulate(example_snapshot(), default_request())
+
+    assert [shift.date for shift in result.shift_records] == [
+        date(2026, 10, 26),
+        date(2026, 10, 27),
+        date(2026, 10, 28),
+        date(2026, 10, 29),
+        date(2026, 10, 30),
+    ]
+    assert all(shift.associated_payday == date(2026, 11, 6) for shift in result.shift_records)
+    assert all(shift.scheduled_start_local.time() == time(8) for shift in result.shift_records)
+
+
+def test_breakdown_before_vs_after_shift_start() -> None:
+    snapshot = example_snapshot(balance_cents=50_000)
+    before = simulate(snapshot, default_request(repair_quote_cents=10_000))
+    after = simulate(
+        snapshot,
+        default_request(repair_quote_cents=10_000, breakdown_time_local=time(9)),
+    )
+
+    assert before.shift_records[0].attendance == "projected_missed"
+    assert after.shift_records[0].attendance == "worked"
+    assert before.repair_projection.modeled_payment_date == BREAKDOWN
+    assert after.repair_projection.modeled_payment_date == BREAKDOWN
+
+
+def test_repair_affordable_immediately_is_charged_once() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=50_000),
+        default_request(repair_quote_cents=40_000),
+    )
+
+    assert result.repair_projection.funding_status == "affordable_and_paid"
+    assert result.repair_projection.cash_balance_after_payment_cents == 10_000
+    assert [event.type for event in result.events].count("repair_payment") == 1
+
+
+def test_repair_becomes_affordable_after_already_earned_payroll() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=0),
+        default_request(repair_quote_cents=40_000),
+    )
+
+    assert result.repair_projection.modeled_payment_date == FIRST_PAYDAY
+    assert sum(shift.attendance == "projected_missed" for shift in result.shift_records) == 5
+
+
+def test_essential_bill_delays_repair() -> None:
+    snapshot = example_snapshot(
+        balance_cents=31_000,
+        bills=[bill("electricity", 25_000, date(2026, 10, 27))],
+    )
+    result = simulate(snapshot, default_request(repair_quote_cents=10_000))
+
+    assert result.repair_projection.modeled_payment_date == FIRST_PAYDAY
+    assert result.bill_outcomes[0].projected_status == "funded"
+
+
+def test_missed_shifts_reduce_only_the_corresponding_future_paycheck() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=0),
+        default_request(forecast_horizon_days=14, repair_quote_cents=150_000),
+    )
+    impacted = next(item for item in result.payroll_records if item.payday == date(2026, 11, 6))
+
+    assert impacted.missed_shift_count == 5
+    assert impacted.actual_projected_take_home_cents == 0
+    assert impacted.lost_take_home_cents == 64_000
+    assert result.payroll_records[0].actual_projected_take_home_cents == 64_000
+
+
+def test_reduced_payroll_does_not_magically_fund_repair() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=0),
+        default_request(repair_quote_cents=70_000, forecast_horizon_days=14),
+    )
+
+    assert result.repair_projection.modeled_payment_date is None
+    assert next(item for item in result.payroll_records if item.payday == date(2026, 11, 6)).actual_projected_take_home_cents == 0
+
+
+def test_repair_can_remain_unaffordable_and_creates_no_charge() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=0),
+        default_request(repair_quote_cents=150_000),
+    )
+
+    assert result.repair_projection.funding_status == "unaffordable_within_horizon"
+    assert result.repair_projection.vehicle_restoration_date is None
+    assert not any(event.type == "repair_payment" for event in result.events)
+
+
+def test_lost_wages_are_not_double_counted() -> None:
+    result = simulate(
+        example_snapshot(balance_cents=0),
+        default_request(forecast_horizon_days=14, repair_quote_cents=150_000),
+    )
+    normal_minus_crisis_before_bills_and_repair = (
+        result.normal_ending_balance_cents - result.crisis_ending_balance_cents
+    )
+
+    assert normal_minus_crisis_before_bills_and_repair == sum(
+        item.take_home_lost_cents for item in result.income_lost_by_payday
+    )
 
 
 def test_bill_before_payday_cannot_use_future_income() -> None:
-    snapshot = example_snapshot(bills=[bill("electricity", 40_000, date(2026, 10, 25))])
-
-    result = simulate(snapshot, default_request(affected_shift_count=0))
-
-    outcome = result.bill_outcomes[0]
-    assert outcome.funded_cents == 31_000
-    assert outcome.unpaid_cents == 9_000
-    assert result.constrained_ending_cash_cents == 64_000
-
-
-def test_same_day_bills_allocate_essential_first_then_id() -> None:
-    due = date(2026, 10, 25)
-    snapshot = example_snapshot(
-        include_paycheck=False,
-        bills=[
-            bill("b-essential", 20_000, due),
-            bill("a-essential", 20_000, due),
-            bill("c-discretionary", 10_000, due, essential=False),
-        ],
+    result = simulate(
+        example_snapshot(bills=[bill("electricity", 40_000, date(2026, 10, 25))]),
+        default_request(),
     )
 
+    assert result.bill_outcomes[0].funded_cents == 31_000
+    assert result.bill_outcomes[0].unpaid_cents == 9_000
+
+
+def test_bill_protective_policy_reserves_near_term_essential_cash() -> None:
     result = simulate(
-        snapshot,
-        default_request(affected_shift_count=0, forecast_horizon_days=1),
+        example_snapshot(
+            balance_cents=50_000,
+            bills=[bill("electricity", 20_000, date(2026, 10, 27))],
+        ),
+        default_request(repair_quote_cents=40_000),
+    )
+
+    assert result.repair_projection.modeled_payment_date == FIRST_PAYDAY
+    assert result.repair_projection.protected_essential_obligations == []
+    assert result.bill_outcomes[0].funded_cents == 20_000
+
+
+def test_same_day_bill_priority_is_stable() -> None:
+    due = date(2026, 10, 25)
+    result = simulate(
+        example_snapshot(
+            bills=[
+                bill("b-essential", 20_000, due),
+                bill("a-essential", 20_000, due),
+                bill("c-discretionary", 10_000, due, essential=False),
+            ]
+        ),
+        default_request(forecast_horizon_days=1, breakdown_date=date(2026, 10, 25)),
     )
 
     assert [item.obligation_id for item in result.bill_outcomes] == [
@@ -159,80 +240,63 @@ def test_same_day_bills_allocate_essential_first_then_id() -> None:
         "c-discretionary",
     ]
     assert [item.funded_cents for item in result.bill_outcomes] == [20_000, 11_000, 0]
-    assert result.unpaid_essential_total_cents == 9_000
-    assert result.peak_funding_gap_cents == 19_000
+
+
+def test_graph_statuses_and_dates_follow_computed_timeline() -> None:
+    result = simulate(example_snapshot(balance_cents=0), default_request())
+    nodes = {node.id: node for node in result.graph_nodes}
+
+    assert nodes["missed_work"].activation_date == BREAKDOWN
+    assert nodes["reduced_paycheck"].status == "inactive"  # impacted payday is outside 7 days
+    assert nodes["repair_delayed"].status == "projected"
+    assert nodes["cash_reserves_depleted"].status == "projected"
+
+
+def test_fixture_and_live_sources_use_the_same_timeline_rules() -> None:
+    fixture = example_snapshot()
+    live = fixture.model_copy(
+        update={
+            "source": SourceMetadata(
+                banking="nessie",
+                simulation_data="seeded_synthetic",
+                mode="live",
+                message="test live normalization",
+            )
+        }
+    )
+
+    fixture_result = simulate(fixture, default_request())
+    live_result = simulate(live, default_request())
+    assert fixture_result.shift_records == live_result.shift_records
+    assert fixture_result.payroll_records == live_result.payroll_records
+    assert fixture_result.repair_projection == live_result.repair_projection
 
 
 def test_simulation_is_deterministic_and_never_changes_history() -> None:
-    snapshot = example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))])
-    transaction_ids = [item.id for item in snapshot.history.transactions]
-    request = default_request()
-
-    first = simulate(snapshot, request)
-    second = simulate(snapshot, request)
-
-    assert first == second
-    assert [item.id for item in snapshot.history.transactions] == transaction_ids
-    assert len(snapshot.history.transactions) == 89
-
-
-def test_repair_slider_changes_exposure_not_balance_or_ledger() -> None:
     snapshot = example_snapshot()
+    transaction_ids = [item.id for item in snapshot.history.transactions]
 
-    low = simulate(snapshot, default_request(repair_quote_cents=10_000))
-    high = simulate(snapshot, default_request(repair_quote_cents=150_000))
-
-    low_repair = next(item for item in low.graph_nodes if item.id == "unexpected_repair_expense")
-    high_repair = next(item for item in high.graph_nodes if item.id == "unexpected_repair_expense")
-    assert low_repair.amount_cents == 10_000
-    assert high_repair.amount_cents == 150_000
-    assert low.crisis_ending_balance_cents == high.crisis_ending_balance_cents
-    assert low.source.current_balance_cents == high.source.current_balance_cents == 31_000
-    assert [item.id for item in low.events] == [item.id for item in high.events]
+    assert simulate(snapshot, default_request()) == simulate(snapshot, default_request())
+    assert [item.id for item in snapshot.history.transactions] == transaction_ids
 
 
-def test_graph_contract_is_stable_and_problem_only() -> None:
-    result = simulate(example_snapshot(), default_request())
-
-    assert [item.id for item in result.graph_nodes] == [
-        "car_breaks_down",
-        "car_unavailable",
-        "commute_disrupted",
-        "missed_work",
-        "reduced_paycheck",
-        "cash_shortfall",
-        "bills_unpaid",
-        "unexpected_repair_expense",
-        "cash_reserves_depleted",
-        "repair_delayed",
-        "extra_transportation_costs",
-        "emergency_borrowing",
-        "future_debt_payments",
-        "late_fees",
-    ]
-    assert len(result.graph_edges) == 17
-    assert all(
-        item.status in {"projected", "conditional", "inactive", "unresolved"}
-        for item in result.graph_nodes
-    )
-
-
-def test_crisis_api_returns_snapshot_and_both_line_series() -> None:
+def test_api_schema_v2_and_stale_manual_outcomes_are_rejected() -> None:
     response = TestClient(app).post(
         "/api/simulations/crisis",
         json={
             "display_name": "Maya Rodriguez",
             "hourly_rate_cents": 2_000,
             "repair_quote_cents": 40_000,
-            "scenario_start_date": "2026-10-24",
-            "affected_shift_count": 2,
+            "breakdown_date": "2026-10-26",
         },
+    )
+    stale = TestClient(app).post(
+        "/api/simulations/crisis",
+        json={"affected_shift_count": 2, "repair_delay_days": 14},
     )
 
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["snapshot"]["source"]["mode"] == "fixture"
-    assert len(payload["simulation"]["cashflow"]) == 31
-    assert "normal_balance_cents" in payload["simulation"]["cashflow"][0]
-    assert "crisis_balance_cents" in payload["simulation"]["cashflow"][0]
-    assert len(payload["simulation"]["graph_nodes"]) == 14
+    payload = response.json()["simulation"]
+    assert payload["schema_version"] == 2
+    assert payload["shift_records"] and payload["payroll_records"]
+    assert stale.status_code == 422

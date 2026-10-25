@@ -500,7 +500,17 @@ def _pathway_instruction(
         "hypothesis": hypothesis.model_dump(mode="json"),
         "instruction": details,
         "tool_call_limit_for_pathway": call_limit,
-        "affected_shift_dates": [str(value) for value in simulation.scenario.affected_shift_dates],
+        "affected_shift_dates": [
+            str(shift.date)
+            for shift in simulation.shift_records
+            if shift.attendance == "projected_missed"
+        ],
+        "payroll_consequences": [
+            payroll.model_dump(mode="json")
+            for payroll in simulation.payroll_records
+            if payroll.lost_take_home_cents > 0
+        ],
+        "repair_projection": simulation.repair_projection.model_dump(mode="json"),
         "context": context.model_dump(mode="json"),
     }
 
@@ -519,7 +529,11 @@ def _transit_calls(
         return []
     zone = ZoneInfo(context.timezone)
     calls: list[tuple[str, dict[str, str]]] = []
-    for shift_date in simulation.scenario.affected_shift_dates:
+    for shift_date in (
+        shift.date
+        for shift in simulation.shift_records
+        if shift.attendance == "projected_missed"
+    ):
         arrival = datetime.combine(shift_date, context.shift_start_local, zone) - timedelta(
             minutes=10
         )
@@ -633,9 +647,18 @@ def _ground_transport_candidate(
 
 
 def _seed_remote_work(simulation: SimulationResult) -> tuple[CandidateAction, ClarifyingQuestion]:
+    at_risk_dates = [
+        shift.date
+        for shift in simulation.shift_records
+        if shift.attendance == "projected_missed"
+    ]
+    count = len(at_risk_dates)
+    date_summary = ", ".join(value.isoformat() for value in at_risk_dates[:5])
+    if count > 5:
+        date_summary += f", and {count - 5} more"
     candidate = CandidateAction(
         id="candidate-remote-work",
-        title="Ask to work remotely for the next two shifts",
+        title=f"Ask to work remotely for {count} at-risk shift(s)",
         mechanism="income_preservation",
         addresses_node_ids=["missed_work", "reduced_paycheck"],
         description="Customer-support work may be office-capable, but Cedarstone Services is fictional and remote eligibility, manager approval, and equipment are all unknown.",
@@ -654,7 +677,7 @@ def _seed_remote_work(simulation: SimulationResult) -> tuple[CandidateAction, Cl
         cost=CandidateCost(
             status="unknown", basis="No remote-work costs or reimbursement terms are known."
         ),
-        potential_effects={"shift_dates_potentially_protected": []},
+        potential_effects={"shift_dates_potentially_protected": at_risk_dates},
         hypothesis_ids=["remote_work"],
         verification_status="hypothesis",
         remaining_unknowns=[
@@ -666,7 +689,10 @@ def _seed_remote_work(simulation: SimulationResult) -> tuple[CandidateAction, Cl
     )
     question = ClarifyingQuestion(
         id="question-remote-work",
-        question="Could you work remotely for the next two shifts if your manager approves it?",
+        question=(
+            f"Could you work remotely for the {count} projected at-risk shift(s)"
+            f" ({date_summary}) if your manager approves it?"
+        ),
         addresses_node_ids=["missed_work", "reduced_paycheck"],
         related_candidate_ids=[candidate.id],
         resolves_requirement_keys=["remote_manager_approval", "remote_work_equipment"],
@@ -1296,7 +1322,13 @@ def research_with_agent(
             pathway=pathway,
         )
     route_status, route_reason = assess_transit(
-        list(evidence_by_id.values()), context, simulation.scenario.affected_shift_dates
+        list(evidence_by_id.values()),
+        context,
+        [
+            shift.date
+            for shift in simulation.shift_records
+            if shift.attendance == "projected_missed"
+        ],
     )
     if route_status == "adjustment" and not any(
         item.id == "emerged_shift_adjustment" for item in hypotheses

@@ -165,11 +165,9 @@ export function CrisisStage({
   snapshot,
   simulation,
   repairQuote,
-  affectedShifts,
   loading,
   error,
   onRepairChange,
-  onAffectedShiftsChange,
   onRerun,
   onBack,
   onNext,
@@ -177,11 +175,9 @@ export function CrisisStage({
   snapshot: CustomerSnapshot;
   simulation: CrisisSimulation;
   repairQuote: number;
-  affectedShifts: number;
   loading: boolean;
   error: string | null;
   onRepairChange: (value: number) => void;
-  onAffectedShiftsChange: (value: number) => void;
   onRerun: () => void;
   onBack: () => void;
   onNext: () => void;
@@ -191,6 +187,8 @@ export function CrisisStage({
     0,
   );
   const live = simulation.source.banking_mode === "live";
+  const missedShifts = simulation.shift_records.filter((shift) => shift.attendance === "projected_missed");
+  const repair = simulation.repair_projection;
 
   return (
     <section className="py-8">
@@ -213,8 +211,8 @@ export function CrisisStage({
       <div className="mt-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         {[
           ["Live current balance", formatCurrency(simulation.source.current_balance_cents), live ? "Nessie sandbox" : "Fixture fallback"],
-          ["Repair quote", formatCurrency(simulation.scenario.repair_quote_cents), `${simulation.scenario.repair_payment_status} · $0 deducted`],
-          ["Lost take-home", formatCurrency(lostTakeHome), `${affectedShifts} missed 8h shifts · 80% estimate`],
+          ["Repair projection", formatCurrency(simulation.scenario.repair_quote_cents), repair.modeled_payment_date ? `Modeled ${formatDate(repair.modeled_payment_date)}` : "Unresolved · $0 deducted"],
+          ["Lost take-home", formatCurrency(lostTakeHome), `${missedShifts.length} calculated missed 8h shifts · 80% estimate`],
           ["Peak raw gap", formatCurrency(simulation.peak_funding_gap_cents), "Required funding, not an overdraft"],
           ["Essential bills unpaid", formatCurrency(simulation.unpaid_essential_total_cents), `${simulation.unpaid_bills.length} projected obligation(s)`],
         ].map(([label, value, note]) => (
@@ -227,16 +225,11 @@ export function CrisisStage({
       </div>
 
       <div className="mt-6 rounded-3xl border border-orange-200 bg-orange-50 p-5">
-        <div className="grid gap-5 lg:grid-cols-[1fr_11rem_auto] lg:items-end">
+        <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-end">
           <div>
             <div className="flex justify-between gap-4"><label htmlFor="rerun-repair" className="text-sm font-semibold text-orange-950">Repair exposure (still unpaid)</label><span className="font-semibold text-orange-950">{formatCurrency(repairQuote * 100)}</span></div>
             <input id="rerun-repair" type="range" min="100" max="1500" step="50" value={repairQuote} onChange={(event) => onRepairChange(Number(event.target.value))} className="mt-3 w-full accent-orange-600" />
           </div>
-          <label className="text-sm font-semibold text-orange-950">Missed shifts
-            <select value={affectedShifts} onChange={(event) => onAffectedShiftsChange(Number(event.target.value))} className="mt-2 block w-full rounded-xl border border-orange-200 bg-white px-3 py-2 text-slate-950">
-              {[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value}</option>)}
-            </select>
-          </label>
           <button type="button" onClick={onRerun} disabled={loading} className="rounded-xl bg-orange-600 px-5 py-3 font-semibold text-white hover:bg-orange-700 disabled:bg-slate-300">{loading ? "Recalculating…" : "Rerun simulation"}</button>
         </div>
         <p className="mt-3 text-xs text-orange-800">Changes apply only when rerun. Historical Nessie records and the current account balance are never edited.</p>
@@ -244,6 +237,24 @@ export function CrisisStage({
 
       {error ? <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</div> : null}
       {simulation.warnings.length ? <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{simulation.warnings.map((warning) => <p key={warning}>{warning}</p>)}</div> : null}
+
+      <div className="mt-6 grid gap-6 xl:grid-cols-2">
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <p className="text-sm font-medium text-orange-600">Derived employment timeline</p>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">Scheduled shifts</h2>
+          <div className="mt-4 max-h-72 divide-y divide-slate-100 overflow-y-auto">
+            {simulation.shift_records.map((shift) => <div key={shift.id} className="flex items-center justify-between gap-4 py-3"><div><p className="text-sm font-semibold text-slate-900">{formatDate(shift.date)} · 08:00–16:00</p><p className="mt-1 text-xs text-slate-500">Paid {formatDate(shift.associated_payday)} · {shift.reason}</p></div><span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${shift.attendance === "worked" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{shift.attendance.replaceAll("_", " ")}</span></div>)}
+          </div>
+        </article>
+        <article className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <p className="text-sm font-medium text-orange-600">One-week payroll lag</p>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-950">Friday paychecks</h2>
+          <div className="mt-4 max-h-72 divide-y divide-slate-100 overflow-y-auto">
+            {simulation.payroll_records.map((payroll) => <div key={payroll.id} className="py-3"><div className="flex justify-between gap-4"><p className="text-sm font-semibold text-slate-900">{formatDate(payroll.payday)}</p><p className="text-sm font-semibold text-slate-900">{formatCurrency(payroll.actual_projected_take_home_cents)}</p></div><p className="mt-1 text-xs text-slate-500">Work {formatDate(payroll.work_period_start)}–{formatDate(payroll.work_period_end)} · {payroll.worked_shift_count} worked / {payroll.missed_shift_count} missed · {formatCurrency(payroll.lost_take_home_cents)} lost</p></div>)}
+          </div>
+          <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-700"><p className="font-semibold">Repair: {repair.funding_status.replaceAll("_", " ")}</p><p className="mt-1 text-xs leading-5 text-slate-500">{repair.blocked_reason ?? `${formatCurrency(repair.quote_cents)} is modeled once on ${formatDate(repair.modeled_payment_date!)} after protected bills.`}</p></div>
+        </article>
+      </div>
 
       <div className="mt-6"><CrisisGraph simulation={simulation} /></div>
 

@@ -104,15 +104,16 @@ never enter browser code.
 
 1. Open the frontend and confirm the starter card says **Live Nessie sandbox** (or read
    the explicit fixture warning).
-2. Keep the default $20 hourly wage, $400 unpaid repair quote, and two missed shifts.
+2. Keep the default $20 hourly wage, $400 repair quote, and October 26 breakdown.
 3. Select **Simulate crisis**.
 4. Watch the problem-only graph reveal the missed-work chain, select nodes to inspect
    evidence, and compare normal versus crisis balance lines.
 5. Review the event ledger and constrained **Projected bills at risk** section. Open the
    banking context to retain access to accounts, categories, bills, and all 90-day
    transactions.
-6. Change the repair quote or missed shifts and choose **Rerun simulation**. A quote alone
-   never changes the live balance or historical ledger.
+6. Change the repair quote or breakdown date and choose **Rerun simulation**. The engine
+   derives attendance, payroll reductions, and the bill-protective repair date; it never
+   changes the live balance or historical ledger.
 
 ## Demo Explore research (Build 03)
 
@@ -148,13 +149,14 @@ errors yield partial or failed results rather than fabricated options. The model
 request/time limits can be changed with `GEMINI_MODEL` and the `RESEARCH_*` backend
 variables in `.env.example`.
 
-The default simulator uses the financial snapshot date in `America/Chicago`, five
-eight-hour weekday shifts, weekly paychecks, and an explicitly labeled 80% take-home
-estimate. Pay loss is applied to the paycheck covering each missed shift. Paychecks are
-processed first on a date; essential bills follow before discretionary bills, with ID as
-the stable same-day tie-breaker. Raw negative balances are funding requirements. A
-separate constrained ledger partially funds obligations only with cash available on the
-due date and reports the remainder as projected unpaid.
+The default simulator uses the financial snapshot date in `America/Chicago`, weekday
+08:00–16:00 shifts, and an explicitly labeled 80% take-home estimate. A Monday–Sunday
+work period is paid the following Friday, so the October 30 paycheck covers October
+19–25 and cannot be reduced by an October 26 breakdown. Each day processes the morning
+shift, then payroll, bills, and finally a possible repair payment. The full quote is paid
+once only when cash can also protect essential bills through the next reliable payday.
+Raw negative balances are funding requirements; the constrained ledger reports what can
+actually be funded on each due date.
 
 To run services separately:
 
@@ -239,6 +241,6 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M3.md](docs/progress/M3.md) for actual milestone verification. Real
+[docs/progress/M3.5.md](docs/progress/M3.5.md) for actual milestone verification. Real
 provider calls are opt-in through Explore; ordinary automated tests use fake adapters
 and do not spend API quota.

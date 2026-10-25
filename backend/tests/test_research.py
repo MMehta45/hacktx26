@@ -30,7 +30,7 @@ from tests.test_simulation import bill, default_request, example_snapshot
 
 def crisis():
     return simulate(
-        example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
+        example_snapshot(bills=[bill("rent", 100_000, date(2026, 10, 31))]),
         default_request(),
         actions=[],
     )
@@ -268,12 +268,12 @@ def test_missing_key_and_fingerprint_changes(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(
         research_service,
         "get_snapshot",
-        lambda **kwargs: example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
+        lambda **kwargs: example_snapshot(bills=[bill("rent", 100_000, date(2026, 10, 31))]),
     )
     settings = Settings(_env_file=None, gemini_api_key=None, serpapi_api_key=None)
     first = run_research(ResearchRequest(scenario=default_request()), settings)
     second = run_research(
-        ResearchRequest(scenario=default_request(affected_shift_count=1)), settings
+        ResearchRequest(scenario=default_request(breakdown_time_local="09:00:00")), settings
     )
     assert first.research.status == "not_configured"
     assert first.research.tool_calls_used == 0
@@ -659,9 +659,15 @@ def test_remote_work_is_seeded_but_never_assumed_approved() -> None:
         ),
     )
     remote = next(item for item in candidates if item.id == "candidate-remote-work")
+    derived_dates = [
+        shift.date for shift in crisis().shift_records if shift.attendance == "projected_missed"
+    ]
     assert remote.verification_status == "hypothesis"
     assert all(requirement.status == "unknown" for requirement in remote.requirements)
-    assert any("work remotely" in item.question.lower() for item in questions)
+    assert remote.potential_effects.shift_dates_potentially_protected == derived_dates
+    remote_question = next(item for item in questions if "work remotely" in item.question.lower())
+    assert f"{len(derived_dates)} projected at-risk shift" in remote_question.question
+    assert derived_dates[0].isoformat() in remote_question.question
     assert any(item.id == "remote_work" for item in hypotheses)
     assert next(item for item in pathways if item.id == "remote_work").tool_calls_used == 0
 
@@ -1208,7 +1214,7 @@ def test_repeated_extraction_failure_keeps_completed_research_status(
     monkeypatch.setattr(
         research_service,
         "get_snapshot",
-        lambda **kwargs: example_snapshot(bills=[bill("rent", 90_000, date(2026, 10, 31))]),
+        lambda **kwargs: example_snapshot(bills=[bill("rent", 100_000, date(2026, 10, 31))]),
     )
 
     class MalformedGemini:

@@ -57,13 +57,13 @@ function StageNavigation({ current, simulation, onNavigate }: { current: Stage; 
 }
 
 function StartStage({
-  name, hourlyWage, repairQuote, affectedShifts, snapshot, requestState,
-  onNameChange, onWageChange, onRepairChange, onAffectedShiftsChange, onSubmit,
+  name, hourlyWage, repairQuote, breakdownDate, snapshot, requestState,
+  onNameChange, onWageChange, onRepairChange, onBreakdownDateChange, onSubmit,
 }: {
-  name: string; hourlyWage: string; repairQuote: number; affectedShifts: number;
+  name: string; hourlyWage: string; repairQuote: number; breakdownDate: string;
   snapshot: CustomerSnapshot | null; requestState: RequestState;
   onNameChange: (value: string) => void; onWageChange: (value: string) => void;
-  onRepairChange: (value: number) => void; onAffectedShiftsChange: (value: number) => void;
+  onRepairChange: (value: number) => void; onBreakdownDateChange: (value: string) => void;
   onSubmit: () => void;
 }) {
   const wageCents = wageInputToCents(hourlyWage);
@@ -103,12 +103,10 @@ function StartStage({
         <div className="mt-6 flex items-center justify-between gap-4"><label htmlFor="repair-quote" className="text-sm font-medium text-slate-700">Unpaid repair quote</label><div className="flex items-center gap-3"><span className="text-lg font-semibold text-slate-950">{formatCurrency(repairQuote * 100)}</span><button type="button" onClick={() => onRepairChange(DEFAULT_REPAIR_QUOTE)} className="text-xs font-medium text-slate-500 underline decoration-slate-300 underline-offset-4 hover:text-slate-950">Reset</button></div></div>
         <input id="repair-quote" type="range" min="100" max="1500" step="50" value={repairQuote} onChange={(event) => onRepairChange(Number(event.target.value))} className="mt-3 w-full accent-orange-600" />
         <div className="mt-1 flex justify-between text-xs text-slate-400"><span>$100</span><span>$1,500</span></div>
-        <label htmlFor="affected-shifts" className="mt-6 block text-sm font-medium text-slate-700">Missed eight-hour shifts</label>
-        <select id="affected-shifts" value={affectedShifts} onChange={(event) => onAffectedShiftsChange(Number(event.target.value))} className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-950">
-          {[0, 1, 2, 3, 4, 5].map((value) => <option key={value} value={value}>{value} shift{value === 1 ? "" : "s"}{value === 2 ? " · default untreated case" : ""}</option>)}
-        </select>
-        <div className="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-slate-950 p-4 text-white"><div><p className="text-xs text-slate-400">Gross / week</p><p className="mt-1 text-xl font-semibold">{preview ? formatCurrency(preview.grossWeeklyCents) : "—"}</p></div><div className="border-l border-white/10 pl-4"><p className="text-xs text-slate-400">Est. net lost</p><p className="mt-1 text-xl font-semibold">{preview ? formatCurrency(preview.estimatedNetPerShiftCents * affectedShifts) : "—"}</p></div></div>
-        <p className="mt-3 text-xs leading-5 text-slate-500">The quote remains exposure only: $0 is deducted unless a payment is explicitly modeled. Borrowing and alternate transport default to $0.</p>
+        <label htmlFor="breakdown-date" className="mt-6 block text-sm font-medium text-slate-700">Breakdown date</label>
+        <input id="breakdown-date" type="date" min="2026-10-24" max="2026-11-23" value={breakdownDate} onChange={(event) => onBreakdownDateChange(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-950" />
+        <div className="mt-6 grid grid-cols-2 gap-3 rounded-2xl bg-slate-950 p-4 text-white"><div><p className="text-xs text-slate-400">Gross / week</p><p className="mt-1 text-xl font-semibold">{preview ? formatCurrency(preview.grossWeeklyCents) : "—"}</p></div><div className="border-l border-white/10 pl-4"><p className="text-xs text-slate-400">Est. net / shift</p><p className="mt-1 text-xl font-semibold">{preview ? formatCurrency(preview.estimatedNetPerShiftCents) : "—"}</p></div></div>
+        <p className="mt-3 text-xs leading-5 text-slate-500">The simulator derives missed 08:00–16:00 shifts, lagged Friday paychecks, and repair timing. No transit, borrowing, or remote work is assumed.</p>
         {requestState.kind === "error" ? <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800"><p className="font-semibold">Simulation failed</p><p className="mt-1">{requestState.message}</p></div> : null}
         <button type="submit" disabled={!isValid || requestState.kind === "loading"} className="mt-6 w-full rounded-xl bg-orange-600 px-5 py-3.5 font-semibold text-white transition hover:bg-orange-700 focus:outline-none focus:ring-4 focus:ring-orange-200 disabled:cursor-not-allowed disabled:bg-slate-300">{requestState.kind === "loading" ? "Simulating dated cash flow…" : "Simulate crisis"}</button>
       </form>
@@ -125,7 +123,7 @@ export default function ScenarioApp() {
   const [name, setName] = useState("Maya Rodriguez");
   const [hourlyWage, setHourlyWage] = useState(DEFAULT_HOURLY_WAGE);
   const [repairQuote, setRepairQuote] = useState(DEFAULT_REPAIR_QUOTE);
-  const [affectedShifts, setAffectedShifts] = useState(2);
+  const [breakdownDate, setBreakdownDate] = useState("2026-10-26");
   const [snapshot, setSnapshot] = useState<CustomerSnapshot | null>(null);
   const [simulation, setSimulation] = useState<CrisisSimulation | null>(null);
   const [requestState, setRequestState] = useState<RequestState>({ kind: "idle" });
@@ -154,7 +152,7 @@ export default function ScenarioApp() {
     setRequestState({ kind: "loading" });
     setResearch(null);
     try {
-      const response = await fetch("/api/simulations/crisis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, affected_shift_count: affectedShifts }) });
+      const response = await fetch("/api/simulations/crisis", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ display_name: name.trim(), hourly_rate_cents: hourlyRateCents, repair_quote_cents: repairQuote * 100, breakdown_date: breakdownDate }) });
       const body = (await response.json()) as CrisisSimulationResponse | { message?: string };
       if (!response.ok) throw new Error("message" in body && body.message ? body.message : "Simulation request failed.");
       const result = body as CrisisSimulationResponse;
@@ -172,7 +170,7 @@ export default function ScenarioApp() {
     if (hourlyRateCents === null || !simulation) return;
     setResearchState({ kind: "loading" });
     try {
-      const response = await fetch("/api/research/interventions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(researchRequestBody({ displayName: name.trim(), hourlyRateCents, repairQuoteCents: repairQuote * 100, affectedShiftCount: affectedShifts }, routeContext, force)) });
+      const response = await fetch("/api/research/interventions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(researchRequestBody({ displayName: name.trim(), hourlyRateCents, repairQuoteCents: repairQuote * 100, breakdownDate }, routeContext, force)) });
       const body = (await response.json()) as ResearchResponse | { message?: string };
       if (!response.ok) throw new Error("message" in body && body.message ? body.message : "Research request failed.");
       const result = body as ResearchResponse;
@@ -191,15 +189,15 @@ export default function ScenarioApp() {
   }
 
   function restart() {
-    setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setAffectedShifts(2); setSimulation(null); setResearch(null); setRouteContext({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd }); setRequestState({ kind: "idle" }); setStage(1);
+    setName("Maya Rodriguez"); setHourlyWage(DEFAULT_HOURLY_WAGE); setRepairQuote(DEFAULT_REPAIR_QUOTE); setBreakdownDate("2026-10-26"); setSimulation(null); setResearch(null); setRouteContext({ home: AUSTIN_DEMO_CONTEXT.home, work: AUSTIN_DEMO_CONTEXT.work, shiftStart: AUSTIN_DEMO_CONTEXT.shiftStart, shiftEnd: AUSTIN_DEMO_CONTEXT.shiftEnd }); setRequestState({ kind: "idle" }); setStage(1);
   }
 
   return (
     <main className="min-h-screen bg-[#f6f5f1] text-slate-950">
       <header className="border-b border-slate-200/80 bg-[#f6f5f1]/95"><div className="mx-auto flex max-w-7xl flex-col gap-5 px-5 py-5 sm:px-8 lg:flex-row lg:items-center lg:justify-between"><button type="button" onClick={() => setStage(1)} className="w-fit text-left"><span className="block font-mono text-[10px] font-semibold uppercase tracking-[0.24em] text-orange-600">HackTX 2026</span><span className="mt-1 block text-lg font-semibold tracking-tight">One Bad Tuesday</span></button><StageNavigation current={stage} simulation={simulation} onNavigate={setStage} /></div></header>
       <div className="mx-auto max-w-7xl px-5 sm:px-8">
-        {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} affectedShifts={affectedShifts} snapshot={snapshot} requestState={requestState} onNameChange={(value) => { setName(value); setResearch(null); }} onWageChange={(value) => { setHourlyWage(value); setResearch(null); }} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onAffectedShiftsChange={(value) => { setAffectedShifts(value); setResearch(null); }} onSubmit={() => void runSimulation()} /> : null}
-        {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} affectedShifts={affectedShifts} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onAffectedShiftsChange={(value) => { setAffectedShifts(value); setResearch(null); }} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
+        {stage === 1 ? <StartStage name={name} hourlyWage={hourlyWage} repairQuote={repairQuote} breakdownDate={breakdownDate} snapshot={snapshot} requestState={requestState} onNameChange={(value) => { setName(value); setResearch(null); }} onWageChange={(value) => { setHourlyWage(value); setResearch(null); }} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onBreakdownDateChange={(value) => { setBreakdownDate(value); setResearch(null); }} onSubmit={() => void runSimulation()} /> : null}
+        {stage === 2 && snapshot && simulation ? <CrisisStage snapshot={snapshot} simulation={simulation} repairQuote={repairQuote} loading={requestState.kind === "loading"} error={requestState.kind === "error" ? requestState.message : null} onRepairChange={(value) => { setRepairQuote(value); setResearch(null); }} onRerun={() => void runSimulation()} onBack={() => setStage(1)} onNext={() => setStage(3)} /> : null}
         {stage === 3 && simulation ? <ResearchStage research={research} loading={researchState.kind === "loading"} error={researchState.kind === "error" ? researchState.message : null} home={routeContext.home} work={routeContext.work} shiftStart={routeContext.shiftStart} shiftEnd={routeContext.shiftEnd} onContextChange={changeRouteContext} onRun={(force) => void runResearch(force)} onBack={() => setStage(2)} onNext={() => setStage(4)} /> : null}
         {stage === 4 && simulation ? <PlanPreview onBack={() => setStage(3)} onAdjust={() => setStage(1)} onRestart={restart} /> : null}
       </div>

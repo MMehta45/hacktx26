@@ -284,3 +284,38 @@ viable candidate, conditional candidate, blocked, rejected with a reason, or ins
 evidence. Exact semantic duplicates are merged by mechanism/title while their evidence
 and hypothesis links are unioned. Repeated extraction failure keeps a completed research
 status when evidence-grounded candidates survived, with warnings and diagnostics attached.
+
+## M3.5 — Derived crisis timeline
+
+### Make employment attendance a derived state
+
+The crisis request now contains a breakdown date/time and repair quote, not missed-shift
+or repair-outcome fields. The simulator generates Monday–Friday 08:00–16:00 shifts,
+maps each to the following-Friday payday for its Monday–Sunday workweek, and determines
+attendance from vehicle availability at shift start. This keeps historical Nessie
+deposits immutable and separates observed banking history from fictional employment
+assumptions and future projections.
+
+### Use deterministic intraday ordering
+
+Each simulated date processes the 08:00 shift, then a Friday payroll arrival, scheduled
+bills, and finally repair affordability. A same-day repair restores the vehicle after
+the morning attendance decision, so a Friday paycheck cannot retroactively recover that
+Friday's missed shift. This single forward pass resolves the unpaid-repair/lost-work/
+lower-payroll feedback loop without recursion.
+
+### Protect near-term essential bills before funding repair
+
+The untreated policy pays the full repair quote once only when constrained cash also
+covers essential obligations due through the next payday supported by already earned or
+hypothetically attendable work after repair. If no such payday exists, remaining
+essential obligations in the forecast stay protected. The policy is intentionally
+conservative and is not claimed to be optimal; Build 04 may compare alternative actions.
+
+### Retain the seeded history without reseeding
+
+The fixture and Nessie seed already create thirteen $640 deposits on Fridays, so no
+historical migration is required. Build 03.5 corrects only the forward forecast mapping:
+the October 30 payroll now covers October 19–25 rather than a Thursday–Wednesday period.
+The existing explicit reset command remains available, but normal API reads never seed
+or mutate Nessie.

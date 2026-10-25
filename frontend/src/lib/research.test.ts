@@ -19,7 +19,7 @@ describe("Austin demo research context", () => {
         displayName: "Maya Rodriguez",
         hourlyRateCents: 2000,
         repairQuoteCents: 40000,
-        affectedShiftCount: 2,
+        breakdownDate: "2026-10-26",
       },
       { home: "Edited origin", work: "Edited work", shiftStart: "08:30", shiftEnd: "16:30" },
       false,
@@ -31,5 +31,6 @@ describe("Austin demo research context", () => {
       shift_end_local: "16:30",
       remote_work_eligibility: "unknown",
     });
+    expect(body.scenario.breakdown_date).toBe("2026-10-26");
   });
 });
