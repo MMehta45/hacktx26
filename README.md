@@ -269,6 +269,6 @@ Dependency versions are locked in `package-lock.json`, `frontend/package-lock.js
   `uv sync --directory backend`.
 
 See [docs/DECISIONS.md](docs/DECISIONS.md) for architectural rationale and
-[docs/progress/M4.1.md](docs/progress/M4.1.md) for the latest recovery/transit reliability verification. Real
+[docs/progress/M4.2.md](docs/progress/M4.2.md) for the latest Explore-to-Plan and financial-opportunity verification. Real
 provider calls are opt-in through Explore; ordinary automated tests use fake adapters
 and do not spend API quota.

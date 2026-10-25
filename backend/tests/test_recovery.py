@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.financial_analysis import analyze_financial_opportunities
 from app.fixtures import upcoming_bills
 from app.main import app
 from app.recovery_models import (
@@ -21,6 +22,7 @@ from app.recovery_service import (
     targeted_research,
 )
 from app.research_models import Evidence, ResearchContext
+from app.research_service import research_fingerprint
 from app.simulation import simulate
 from app.simulation_models import (
     AlternativeRepairQuoteEffect,
@@ -303,14 +305,21 @@ def test_explore_result_to_answer_and_recovery_evaluation_flow(
         lambda **kwargs: example_snapshot(bills=upcoming_bills(date(2026, 10, 24))),
     )
     client = TestClient(app)
+    scenario = default_request(forecast_horizon_days=30)
+    context = ResearchContext()
+    expected_fingerprint = research_fingerprint(
+        simulation=simulate(example_snapshot(bills=upcoming_bills(date(2026, 10, 24))), scenario),
+        scenario=scenario,
+        context=context,
+    )
     created = client.post(
         "/api/recovery/sessions",
         json={
-            "scenario": default_request(forecast_horizon_days=30).model_dump(mode="json"),
+            "scenario": scenario.model_dump(mode="json"),
             "research": {
                 "status": "completed",
                 "run_id": "explore-run",
-                "simulation_fingerprint": "explore-fingerprint",
+                "simulation_fingerprint": expected_fingerprint,
                 "research_started_at": "2026-10-25T12:00:00Z",
                 "research_finished_at": "2026-10-25T12:00:01Z",
                 "priority_targets": [],
@@ -324,6 +333,8 @@ def test_explore_result_to_answer_and_recovery_evaluation_flow(
     )
     assert created.status_code == 200
     session = created.json()
+    assert session["research_run_id"] == "explore-run"
+    assert session["research"]["simulation_fingerprint"] == expected_fingerprint
     answered = client.post(
         f"/api/recovery/sessions/{session['id']}/answers",
         json={
@@ -358,10 +369,17 @@ def test_recovery_accepts_build03_route_name_and_preserves_transit_contract(
         lambda **kwargs: example_snapshot(bills=upcoming_bills(date(2026, 10, 24))),
     )
     client = TestClient(app)
+    scenario = default_request(forecast_horizon_days=30)
+    context = ResearchContext()
+    expected_fingerprint = research_fingerprint(
+        simulation=simulate(example_snapshot(bills=upcoming_bills(date(2026, 10, 24))), scenario),
+        scenario=scenario,
+        context=context,
+    )
     research = {
         "status": "completed",
         "run_id": "build03-transit",
-        "simulation_fingerprint": "fixture-fingerprint",
+        "simulation_fingerprint": expected_fingerprint,
         "research_started_at": "2026-10-25T12:00:00Z",
         "research_finished_at": "2026-10-25T12:00:01Z",
         "priority_targets": [],
@@ -428,7 +446,7 @@ def test_recovery_accepts_build03_route_name_and_preserves_transit_contract(
     }
     created = client.post(
         "/api/recovery/sessions",
-        json={"scenario": default_request(forecast_horizon_days=30).model_dump(mode="json"), "research": research},
+        json={"scenario": scenario.model_dump(mode="json"), "research": research},
     )
     assert created.status_code == 200, created.text
     evidence = created.json()["evidence"][0]
@@ -515,3 +533,36 @@ def test_targeted_transit_research_preserves_answers_and_adds_quantified_routes(
     assert transit
     assert all(item.quantified and len(item.effects) == 2 for item in transit)
     assert result.calls_used == 4
+
+
+def test_financial_opportunities_deduplicate_scheduled_subscription_and_classify_variable_spending() -> None:
+    snapshot = example_snapshot(bills=upcoming_bills(date(2026, 10, 24)))
+    opportunities = analyze_financial_opportunities(snapshot)
+    scheduled = next(item for item in opportunities if item.scheduled_bill_id == "schedule-streaming")
+    assert scheduled.forecast_included is True
+    assert not any(item.kind == "recurring_charge" and item.category == "Subscriptions" for item in opportunities)
+    groceries = next(item for item in opportunities if item.merchant == "H-E-B")
+    dining = next(item for item in opportunities if item.merchant == "Taco Deli")
+    assert groceries.classification == "variable_essential"
+    assert groceries.potential_savings_cents is None
+    assert dining.classification == "discretionary"
+    assert dining.potential_savings_cents is not None
+    assert dining.forecast_included is False
+
+
+def test_recovery_rejects_research_from_a_different_scenario(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import recovery_service
+
+    _sessions.clear()
+    monkeypatch.setattr(recovery_service, "get_snapshot", lambda **kwargs: example_snapshot())
+    research = {
+        "status": "completed", "run_id": "wrong-run", "simulation_fingerprint": "not-this-scenario",
+        "research_started_at": "2026-10-25T12:00:00Z", "research_finished_at": "2026-10-25T12:00:01Z",
+        "priority_targets": [], "research_events": [], "evidence": [], "candidate_actions": [],
+        "tool_calls_used": 0, "cache_hits": 0,
+    }
+    with pytest.raises(ValueError, match="different scenario"):
+        create_session(
+            CreateRecoverySessionRequest.model_validate({"scenario": default_request().model_dump(mode="json"), "research": research}),
+            Settings(_env_file=None, demo_data_mode="fixture"),
+        )

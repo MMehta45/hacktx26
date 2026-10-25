@@ -142,6 +142,32 @@ class RecoveryEvaluation(ApiModel):
     plans: list[RecoveryPlan] = Field(max_length=3)
 
 
+class FinancialOpportunity(ApiModel):
+    """Read-only history analysis; never itself adds a forecast ledger entry."""
+
+    id: str
+    kind: Literal["scheduled_bill", "recurring_charge", "variable_spending"]
+    merchant: str
+    category: str
+    classification: Literal["fixed_essential", "variable_essential", "discretionary"]
+    monthly_average_cents: int = Field(ge=0)
+    expected_next_date: date | None = None
+    confidence: Literal["confirmed", "high", "medium", "low"]
+    transaction_ids: list[str] = Field(default_factory=list)
+    scheduled_bill_id: str | None = None
+    forecast_included: bool = False
+    potential_savings_cents: int | None = Field(default=None, ge=0)
+    explanation: str
+
+
+class CandidateSummary(ApiModel):
+    total_research_candidates: int = Field(default=0, ge=0)
+    executable_actions: int = Field(default=0, ge=0)
+    conditional_executable_actions: int = Field(default=0, ge=0)
+    unquantified_leads: int = Field(default=0, ge=0)
+    blocked_candidates: int = Field(default=0, ge=0)
+
+
 class RecoverySession(ApiModel):
     schema_version: Literal[1] = 1
     id: str
@@ -159,6 +185,10 @@ class RecoverySession(ApiModel):
     next_question_ids: list[str] = Field(max_length=2)
     outreach_drafts: list[OutreachDraft]
     evidence: list[Evidence]
+    # Immutable Explore payload retained for traceability and Build 04 follow-up questions.
+    research: ResearchResult | None = None
+    financial_opportunities: list[FinancialOpportunity] = Field(default_factory=list)
+    candidate_summary: CandidateSummary = Field(default_factory=CandidateSummary)
     evaluation: RecoveryEvaluation
     research_calls_used: int = Field(default=0, ge=0)
     research_cache_hits: int = Field(default=0, ge=0)

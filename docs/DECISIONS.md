@@ -396,3 +396,27 @@ same place containing non-negated positive price language. Negative-only, missin
 or rating-only shops are suppressed in research, recovery conversion, and frontend display.
 Qualified shops request an alternative quote against Maya's existing $400 quote; reviews
 never create a lower repair amount.
+
+## M4.2 — Research handoff and financial opportunities
+
+### Bind a recovery session to the exact Explore scenario and context
+
+Explore and Recovery now share a stable fingerprint over the read-only simulation,
+scenario inputs, scheduled obligations, income-loss timeline, and geographic/work context.
+Recovery rejects a supplied research result when that fingerprint differs instead of mixing
+evidence from another scenario. Browser session reuse additionally compares the stored
+research run ID, so a baseline session cannot replace a later Explore-backed session.
+
+### Keep historical-spending analysis explanatory until an explicit dated effect exists
+
+The recovery response exposes scheduled obligations, conservative inferred monthly charges,
+and variable-spending categories with source transaction IDs and confidence. Scheduled bills
+remain the only baseline forecast expenses. A matching historical recurring charge is marked
+as already scheduled rather than projected a second time; discretionary history is a
+conditional opportunity, never cash that has already been saved.
+
+### Separate a rent request from landlord agreement
+
+Willingness to request an extension creates only an unsent draft and pending status. A
+separate landlord-agreement answer unlocks a proposed date; only the dated agreement creates
+the bill-date effect, and that effect moves—not waives—the full obligation.

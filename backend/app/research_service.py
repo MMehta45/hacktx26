@@ -14,6 +14,19 @@ from app.snapshot import get_snapshot
 _research_cache: dict[str, tuple[datetime, ResearchResult]] = {}
 
 
+def research_fingerprint(*, simulation, scenario, context) -> str:
+    """Stable identity shared by Explore and Recovery; excludes retrieval time."""
+    fingerprint_data = {
+        "source": simulation.source.model_dump(mode="json", exclude={"source_retrieved_at"}),
+        "scenario": simulation.scenario.model_dump(mode="json"),
+        "scenario_request": scenario.model_dump(mode="json"),
+        "context": context.model_dump(mode="json"),
+        "bills": [bill.model_dump(mode="json") for bill in simulation.bill_outcomes],
+        "income_losses": [loss.model_dump(mode="json") for loss in simulation.income_lost_by_payday],
+    }
+    return hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()
+
+
 def run_research(
     request: ResearchRequest, settings: Settings, *, gemini=None, serp=None
 ) -> ResearchResponse:
@@ -24,17 +37,9 @@ def run_research(
         repair_quote_cents=request.scenario.repair_quote_cents,
     )
     simulation = simulate(snapshot, request.scenario, actions=[])
-    fingerprint_data = {
-        "source": simulation.source.model_dump(mode="json", exclude={"source_retrieved_at"}),
-        "scenario": simulation.scenario.model_dump(mode="json"),
-        "scenario_request": request.scenario.model_dump(mode="json"),
-        "context": request.context.model_dump(mode="json"),
-        "bills": [bill.model_dump(mode="json") for bill in simulation.bill_outcomes],
-        "income_losses": [
-            loss.model_dump(mode="json") for loss in simulation.income_lost_by_payday
-        ],
-    }
-    fingerprint = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True).encode()).hexdigest()
+    fingerprint = research_fingerprint(
+        simulation=simulation, scenario=request.scenario, context=request.context
+    )
     now = datetime.now(UTC)
     cached = _research_cache.get(fingerprint)
     if (

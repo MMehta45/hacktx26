@@ -120,6 +120,11 @@ export function RecoveryStage({ request, research, onBack, onAdjust, onRestart }
             }
           }
         }
+        // A saved baseline session must never displace a completed Explore run.
+        if (next && next.research_run_id !== (research?.run_id ?? null)) {
+          window.localStorage.removeItem(storageKey);
+          next = null;
+        }
         if (!next) next = await api<RecoverySession>("/api/recovery/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request) });
         if (!live) return;
         window.localStorage.setItem(storageKey, next.id);
@@ -130,7 +135,7 @@ export function RecoveryStage({ request, research, onBack, onAdjust, onRestart }
     }
     void load();
     return () => { live = false; };
-  }, [request, storageKey]);
+  }, [request, research?.run_id, storageKey]);
 
   async function mutate(path: string, body: object) {
     if (!session) return;
@@ -157,6 +162,7 @@ export function RecoveryStage({ request, research, onBack, onAdjust, onRestart }
     <section className="py-10">
       <div className="rounded-[2rem] bg-slate-950 p-7 text-white sm:p-10"><p className="font-mono text-xs uppercase tracking-[0.22em] text-orange-300">Stage 04 · interactive recovery</p><h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Compare plans, then confirm what is actually possible.</h1><p className="mt-4 max-w-3xl text-slate-300">Every card reruns the dated shift, Friday-payroll, bill-allocation, and repair-affordability engine. Conditional outcomes show what happens only if their listed dependencies succeed.</p><div className="mt-6 flex flex-wrap gap-3 text-xs text-slate-300"><span>{session.evaluation.evaluated_plan_count} combinations evaluated</span><span>•</span><span>Up to 3 actions per plan</span><span>•</span><span>Session v{session.version}</span></div></div>
       {status.kind === "error" ? <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{status.message}</div> : status.message ? <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">{status.message}</div> : null}
+      {!research ? <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950"><p className="font-semibold">Baseline options only</p><p className="mt-1">Explore has not been run for these scenario inputs. Return to Explore to research location-specific options, or continue with the clearly labeled built-in baseline actions.</p></div> : <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-900">Using Explore run <span className="font-mono">{research.run_id.slice(0, 8)}</span> with {research.evidence.length} evidence record(s) and {research.candidate_actions.length} researched candidate(s).</div>}
       {questions.length ? <div className="mt-8"><h2 className="text-2xl font-semibold">Resolve the highest-impact unknowns</h2><p className="mt-2 text-sm text-slate-600">Your answer can unlock a draft or mark an option possible. It never records third-party approval unless you explicitly confirm it.</p><div className="mt-4 grid gap-4 lg:grid-cols-2">{questions.map((question) => <QuestionCard key={question.id} question={question} busy={status.kind === "loading"} onAnswer={(value) => void mutate("answers", { session_version: session.version, question_id: question.id, value })} />)}</div></div> : null}
       {session.answers.length ? <details className="mt-5 rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer text-sm font-semibold">Review or revise {session.answers.length} recorded answer(s)</summary><div className="mt-3 space-y-3">{session.answers.map((answer) => { const question = session.questions.find((item) => item.id === answer.question_id); return <div key={answer.question_id} className="flex flex-col justify-between gap-2 border-t border-slate-100 pt-3 text-sm sm:flex-row sm:items-center"><div><p className="font-medium">{question?.prompt ?? answer.question_id}</p><p className="text-slate-500">Current answer: {String(answer.value)}</p></div>{typeof answer.value === "boolean" ? <div className="flex gap-2"><button disabled={status.kind === "loading"} onClick={() => void mutate("answers", { session_version: session.version, question_id: answer.question_id, value: true })} className="rounded-md border border-slate-300 px-2 py-1 text-xs">Change to yes</button><button disabled={status.kind === "loading"} onClick={() => void mutate("answers", { session_version: session.version, question_id: answer.question_id, value: false })} className="rounded-md border border-slate-300 px-2 py-1 text-xs">Change to no</button></div> : null}</div>; })}</div></details> : null}
       {session.outreach_drafts.length ? <div className="mt-8"><h2 className="text-2xl font-semibold">Prepared outreach — not sent</h2><div className="mt-4 grid gap-4 lg:grid-cols-2">{session.outreach_drafts.map((draft) => <article key={draft.id} className="rounded-2xl border border-blue-200 bg-blue-50 p-5"><p className="text-xs font-semibold uppercase text-blue-800">Draft only</p><h3 className="mt-2 font-semibold">{draft.subject}</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{draft.body}</p><button onClick={() => void navigator.clipboard.writeText(`Subject: ${draft.subject}\n\n${draft.body}`)} className="mt-4 rounded-lg bg-blue-900 px-3 py-2 text-xs font-semibold text-white">Copy draft</button><p className="mt-2 text-xs text-blue-900">{draft.disclaimer}</p></article>)}</div></div> : null}

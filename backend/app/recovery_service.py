@@ -7,8 +7,10 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.config import Settings
+from app.financial_analysis import analyze_financial_opportunities
 from app.models import CustomerSnapshot
 from app.recovery_models import (
+    CandidateSummary,
     CreateRecoverySessionRequest,
     EvaluateRecoveryRequest,
     OutreachDraft,
@@ -28,6 +30,7 @@ from app.recovery_models import (
 )
 from app.research_models import Evidence, ResearchResult
 from app.research_serpapi import SearchBudgetExceeded, SearchFailure, SerpResearch
+from app.research_service import research_fingerprint
 from app.simulation import simulate
 from app.simulation_models import (
     AlternativeRepairQuoteEffect,
@@ -166,6 +169,17 @@ def _base_questions() -> list[RecoveryQuestion]:
             active=False,
         ),
         RecoveryQuestion(
+            id="question-rent-approved",
+            prompt="Has the landlord actually agreed to an extension?",
+            answer_type="yes_no",
+            reason="A request or proposed date is not an approved payment arrangement.",
+            requirement_ids=["rent_extension_approval"],
+            candidate_ids=["action-rent-extension"],
+            priority_score=27,
+            depends_on_question_id="question-rent-considered",
+            active=False,
+        ),
+        RecoveryQuestion(
             id="question-rent-new-date",
             prompt="If the landlord agreed, what is the exact new rent due date?",
             answer_type="date",
@@ -173,7 +187,7 @@ def _base_questions() -> list[RecoveryQuestion]:
             requirement_ids=["rent_extension_approval"],
             candidate_ids=["action-rent-extension"],
             priority_score=27,
-            depends_on_question_id="question-rent-considered",
+            depends_on_question_id="question-rent-approved",
             active=False,
         ),
         RecoveryQuestion(
@@ -358,8 +372,6 @@ def _initial_actions(
     if research:
         evidence_by_id = {item.id: item for item in research.evidence}
         for candidate in research.candidate_actions:
-            if candidate.mechanism not in {"transportation", "repair_affordability", "bill_flexibility", "assistance"}:
-                continue
             if candidate.mechanism == "repair_affordability":
                 cited = [
                     evidence_by_id[item]
@@ -379,9 +391,12 @@ def _initial_actions(
                 continue
             strategy = {
                 "transportation": "transportation",
+                "income_preservation": "income_preservation",
                 "repair_affordability": "repair_affordability",
                 "bill_flexibility": "bill_flexibility",
+                "budget_adjustment": "cash_preservation",
                 "assistance": "assistance",
+                "borrowing_risk": "borrowing",
             }[candidate.mechanism]
             actions.append(
                 RecoveryActionDefinition(
@@ -400,6 +415,21 @@ def _initial_actions(
 
 def _requirement_map(session: RecoverySession) -> dict[str, RecoveryRequirement]:
     return {item.id: item for item in session.requirements}
+
+
+def _candidate_summary(
+    actions: list[RecoveryActionDefinition], research: ResearchResult | None
+) -> CandidateSummary:
+    researched = research.candidate_actions if research else []
+    quantified = [item for item in actions if item.quantified]
+    conditional = [item for item in quantified if item.requirement_ids]
+    return CandidateSummary(
+        total_research_candidates=len(researched),
+        executable_actions=len(quantified),
+        conditional_executable_actions=len(conditional),
+        unquantified_leads=sum(not item.quantified for item in actions),
+        blocked_candidates=sum(1 for item in (research.hypothesis_outcomes if research else []) if item.status == "blocked"),
+    )
 
 
 def _action_feasibility(
@@ -627,6 +657,16 @@ def create_session(request: CreateRecoverySessionRequest, settings: Settings) ->
         repair_quote_cents=request.scenario.repair_quote_cents,
     )
     baseline = simulate(snapshot, request.scenario, actions=[])
+    if request.research:
+        expected_research_fingerprint = research_fingerprint(
+            simulation=baseline,
+            scenario=request.scenario,
+            context=request.context,
+        )
+        if request.research.simulation_fingerprint != expected_research_fingerprint:
+            raise ValueError(
+                "The supplied Explore result belongs to a different scenario or work-location context. Run Explore again before planning."
+            )
     fingerprint = _fingerprint(snapshot, request.scenario)
     actions, requirements = _initial_actions(snapshot, baseline, request.research)
     now = datetime.now(UTC)
@@ -654,6 +694,9 @@ def create_session(request: CreateRecoverySessionRequest, settings: Settings) ->
         next_question_ids=[],
         outreach_drafts=[],
         evidence=request.research.evidence if request.research else [],
+        research=request.research,
+        financial_opportunities=analyze_financial_opportunities(snapshot),
+        candidate_summary=_candidate_summary(actions, request.research),
         evaluation=empty_evaluation,
         warnings=(
             []
@@ -897,6 +940,14 @@ def submit_answer(
                 draft = _bill_draft(rent.name, rent.due_date)
                 session.outreach_drafts = [item for item in session.outreach_drafts if item.id != draft.id]
                 session.outreach_drafts.append(draft)
+    elif request.question_id == "question-rent-approved":
+        _set_requirement(
+            session,
+            "rent_extension_approval",
+            "possible" if yes else "rejected",
+            source="user_answer",
+            established_by=answer.question_id,
+        )
     elif request.question_id == "question-rent-new-date":
         new_date = date.fromisoformat(str(request.value))
         rent = next((item for item in stored.snapshot.upcoming_bills if item.category == "Housing/Rent"), None)

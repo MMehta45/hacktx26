@@ -125,6 +125,17 @@ class TransitLeg(ApiModel):
     duration_minutes: int | None = Field(default=None, ge=0)
     distance_meters: int | None = Field(default=None, ge=0)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_route_name(cls, value: object) -> object:
+        """Normalize Build 03's dual-field payload before strict extra checking."""
+        if isinstance(value, dict) and "route_name" in value:
+            normalized = dict(value)
+            normalized.setdefault("route", normalized["route_name"])
+            normalized.pop("route_name", None)
+            return normalized
+        return value
+
 
 class Evidence(ApiModel):
     id: str
