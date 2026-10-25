@@ -40,6 +40,10 @@ class ExpenseEffect(EffectBase):
     date: date
     description: str
     supported_shift_ids: list[str] = Field(default_factory=list)
+    # Transportation is only paid when this action actually supplies the commute.
+    # This avoids charging a fare when another selected action (for example remote
+    # work) preserves the same shift.
+    charge_only_when_needed_for_supported_shift: bool = False
 
 
 class BillDueDateEffect(EffectBase):

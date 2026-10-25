@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.config import Settings
+from app.demo_transit import maya_route_5_fixture
 from app.research_agent import LiveGemini, ResearchRunMeta, research_with_agent
 from app.research_graph import rank_targets
 from app.research_models import ResearchRequest, ResearchResponse, ResearchResult
@@ -37,6 +38,9 @@ def run_research(
         repair_quote_cents=request.scenario.repair_quote_cents,
     )
     simulation = simulate(snapshot, request.scenario, actions=[])
+    demo_transit_evidence = maya_route_5_fixture(
+        request.scenario.display_name, request.context, simulation
+    )
     fingerprint = research_fingerprint(
         simulation=simulation, scenario=request.scenario, context=request.context
     )
@@ -71,7 +75,7 @@ def run_research(
             research_finished_at=datetime.now(UTC),
             priority_targets=targets,
             research_events=[],
-            evidence=[],
+            evidence=demo_transit_evidence,
             candidate_actions=[],
             clarifying_questions=[],
             tool_calls_used=0,
@@ -112,6 +116,9 @@ def run_research(
     finally:
         if serp is None:
             serp_client.close()
+    # The deterministic fixture is deliberately first: live Maps output is kept
+    # for research, but cannot replace the fixed hackathon-demo assumptions.
+    evidence = [*demo_transit_evidence, *evidence]
     grounded = any(
         candidate.verification_status not in {"hypothesis", "unverified"}
         for candidate in candidates

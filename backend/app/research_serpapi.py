@@ -5,7 +5,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from math import ceil
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -63,6 +63,13 @@ def _address_key(value: object) -> str:
 def _addresses_match(requested: str | None, resolved: str | None) -> bool:
     left, right = _address_key(requested), _address_key(resolved)
     return bool(left and right and (left in right or right in left))
+
+
+def _transit_directions_url(origin: str, destination: str) -> str:
+    """Google Maps URL documents endpoints/mode only; it cannot promise our timed query."""
+    return "https://www.google.com/maps/dir/?" + urlencode(
+        {"api": "1", "origin": origin, "destination": destination, "travelmode": "transit"}
+    )
 
 
 def _local_time(value: object, day: datetime) -> datetime | None:
@@ -212,6 +219,8 @@ class SerpResearch:
                 or row.get("place_id_search")
                 or payload.get("search_metadata", {}).get("google_maps_directions_url")
             )
+            if engine == "google_maps_directions":
+                url = _transit_directions_url(params["start_addr"], params["end_addr"])
             title = _safe_text(row.get("title") or row.get("name") or row.get("via"), 120)
             reviews = _review_snippets(row)
             snippet = _safe_text(
@@ -330,6 +339,11 @@ class SerpResearch:
                     time_constraint_honored = 0 <= seconds_late <= 2 * 60 * 60
                 else:
                     time_constraint_honored = False
+                # CapMetro's published standard single-ride fare is a bounded
+                # fallback when Directions omits a numeric fare. It is not
+                # treated as provider-observed and remains explicitly labeled.
+                if amount is None and time_constraint_honored is True:
+                    amount = 125
             if not title:
                 title = (
                     f"Transit itinerary via {', '.join(dict.fromkeys(route_numbers))}"
@@ -340,9 +354,17 @@ class SerpResearch:
             limitations = [
                 "Personal ability to use transit and current service availability still require confirmation."
             ]
+            if engine == "google_maps_directions" and params.get("time"):
+                limitations.append(
+                    "The Google Maps link preserves transit mode and endpoints, but may open at a current/default time; rely on this record's verified date and times."
+                )
             if engine == "google_maps_directions" and time_constraint_honored is False:
                 limitations.append(
                     "The returned itinerary did not honor the requested arrive-by/depart-at time and cannot protect a shift."
+                )
+            if engine == "google_maps_directions" and row.get("cost") is None:
+                limitations.append(
+                    "Fare was missing from Directions; the amount uses CapMetro's published standard fare, not a provider quote."
                 )
             output.append(
                 Evidence(
@@ -400,8 +422,20 @@ class SerpResearch:
                     walking_duration_minutes=walking_duration if engine == "google_maps_directions" else None,
                     boarding_stop=transit_stops[0] if transit_stops else None,
                     alighting_stop=transit_stops[-1] if transit_stops else None,
-                    fare_source="SerpApi Google Maps Directions cost field" if amount is not None else None,
-                    fare_certainty="provider_observed" if amount is not None else "unknown" if engine == "google_maps_directions" else None,
+                    fare_source=(
+                        "SerpApi Google Maps Directions cost field"
+                        if row.get("cost") is not None
+                        else "CapMetro published standard single-ride fare"
+                        if engine == "google_maps_directions" and amount is not None
+                        else None
+                    ),
+                    fare_certainty=(
+                        "provider_observed"
+                        if row.get("cost") is not None and amount is not None
+                        else "official_published"
+                        if engine == "google_maps_directions" and amount is not None
+                        else None
+                    ),
                     transit_legs=legs,
                 )
             )

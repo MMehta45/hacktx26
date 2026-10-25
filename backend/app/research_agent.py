@@ -76,8 +76,11 @@ class LiveGemini:
             "target_node_ids, impact/urgency/actionability integers 1-3, priority_score as their "
             "product, evidence_need, investigation_mode (public_research, ask_user, or no_research), "
             "and optionally suggested_tool (search_web, search_places, find_transit) and "
-            "suggested_query. Include opportunities beyond transit, repair, and assistance when "
-            "context supports them. Do not assume permission, eligibility, prices, or remote access.",
+            "suggested_query. Cover distinct mechanisms when relevant: transportation (transit, carpool, borrowed "
+            "vehicle, shift adjustments), income preservation (remote work, makeup shifts, swaps), bill flexibility, "
+            "official assistance, repair affordability, supported expense reduction, and lawful cash-timing options. "
+            "Start with high-impact cascade bottlenecks, propose distinct approaches rather than variations of one idea, "
+            "state what must be verified before simulation, and do not assume permission, eligibility, prices, or remote access.",
             config=types.GenerateContentConfig(
                 response_mime_type="application/json", temperature=0.35, max_output_tokens=2400
             ),
@@ -534,11 +537,13 @@ def _transit_calls(
         for shift in simulation.shift_records
         if shift.attendance == "projected_missed"
     ):
-        arrival = datetime.combine(shift_date, context.shift_start_local, zone) - timedelta(
-            minutes=10
-        )
+        # Google Maps directions end at the requested workplace address, including
+        # its walking legs. Ask to arrive by the actual shift start; feasibility
+        # later verifies the returned final arrival against this same boundary.
+        arrival = datetime.combine(shift_date, context.shift_start_local, zone)
+        # Return can begin after a realistic handoff/buffer, not before shift end.
         departure = datetime.combine(shift_date, context.shift_end_local, zone) + timedelta(
-            minutes=5
+            minutes=15
         )
         calls.extend(
             [
@@ -548,7 +553,7 @@ def _transit_calls(
                         "origin": context.home_location,
                         "destination": context.work_location,
                         "arrive_by_iso": arrival.isoformat(),
-                        "reason": f"Check arrival before the {context.shift_start_local:%H:%M} shift on {shift_date}.",
+                        "reason": f"Check full door-to-door arrival by the {context.shift_start_local:%H:%M} shift on {shift_date}.",
                     },
                 ),
                 (
@@ -557,7 +562,7 @@ def _transit_calls(
                         "origin": context.work_location,
                         "destination": context.home_location,
                         "depart_at_iso": departure.isoformat(),
-                        "reason": f"Check return travel after the {context.shift_end_local:%H:%M} shift on {shift_date}.",
+                        "reason": f"Check full return travel departing at or after {departure:%H:%M} (15-minute buffer after shift) on {shift_date}.",
                     },
                 ),
             ]

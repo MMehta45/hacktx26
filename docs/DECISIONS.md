@@ -1,5 +1,13 @@
 # Architecture decisions
 
+## M4.5 — Route 5 is an outage-duration strategy
+
+The deterministic Route 5 fixture is represented in Recovery as one multi-day transportation action with one preserve-shift and one conditional $2.50 expense effect per eligible baseline missed weekday. The simulator, rather than the action definition, determines which of those offered trips are actually used: remote work takes precedence for an overlapping shift, and car restoration stops later transit fares. Recovery returns up to eight distinct strategy signatures instead of enforcing a three-card cap; all ranks remain the optimizer's actual ranks.
+
+## M4.4 — Deterministic Route 5 demo data
+
+Live directions results are retained for future use, but are not sufficiently reliable for the fixed HackTX demo. For only Maya Rodriguez's exact documented Austin addresses, weekday 08:00–16:00 schedule, and America/Chicago timezone, the app emits an explicit `demo_scenario_assumption` Route 5 fixture. It supplies 07:35 outbound departure, 07:52 arrival near work, 16:17 return departure, and a $1.25 one-way fare. It does not infer stops, walks, transfers, or a return arrival. The route stays conditional on Maya's personal ability to use it; provider output cannot override this fixture. Transit costs are conditional simulator expenses so a remote-work overlap or restored car does not charge an unused ride.
+
 ## M0 — Repository foundation
 
 ### Separate frontend and backend in one repository
@@ -429,3 +437,11 @@ approvals use unsent outreach drafts rather than invented public URLs. Direct pr
 shifts are separated from later shifts restored by earlier repair, while payday deltas come
 from rerun payroll records. Scheduled bill outcomes remain the source of truth for unpaid
 essentials, so a later ending-balance improvement cannot imply an earlier bill was funded.
+
+### Transit fallback and per-day qualification
+
+Transit evidence is evaluated independently for each affected shift. A provider itinerary
+that misses the requested arrival/departure window remains rejected; a valid itinerary with
+no returned fare may use the explicitly labeled published CapMetro standard fare, while an
+invalid or late itinerary remains unknown-cost. This preserves the distinction between
+provider-observed, official-published, estimated, and unknown fares.

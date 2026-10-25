@@ -166,6 +166,8 @@ def simulate(
         raise ValueError("Recovery effect IDs must be unique.")
     preserve_shift_ids: set[str] = set()
     action_flows: dict[date, list[tuple[str, int, str, str]]] = {}
+    conditional_shift_expenses: dict[date, list[ExpenseEffect]] = {}
+    preserve_actions_by_shift: dict[str, set[str]] = {}
     restricted_assistance: dict[str, int] = {}
     makeup_wages: dict[date, int] = {}
     makeup_original_shift_ids: set[str] = set()
@@ -185,8 +187,18 @@ def simulate(
     for effect in actions:
         if isinstance(effect, PreserveShiftEffect):
             preserve_shift_ids.update(effect.shift_ids)
+            for shift_id in effect.shift_ids:
+                preserve_actions_by_shift.setdefault(shift_id, set()).add(effect.action_id)
         elif isinstance(effect, ExpenseEffect):
-            add_flow(effect.date, effect.ledger_id, -effect.amount_cents, "action_expense", effect.description)
+            if effect.charge_only_when_needed_for_supported_shift:
+                if not effect.supported_shift_ids:
+                    raise ValueError("Conditional shift expense requires a supported shift.")
+                if effect.ledger_id in ledger_ids:
+                    raise ValueError(f"Duplicate recovery ledger ID: {effect.ledger_id}.")
+                ledger_ids.add(effect.ledger_id)
+                conditional_shift_expenses.setdefault(effect.date, []).append(effect)
+            else:
+                add_flow(effect.date, effect.ledger_id, -effect.amount_cents, "action_expense", effect.description)
         elif isinstance(effect, AssistanceEffect):
             if (
                 effect.restricted_to_obligation_id
@@ -379,6 +391,31 @@ def simulate(
                     reason=reason,
                 )
             )
+
+            # A transit fare is paid only if this action is the actual alternate
+            # commute preserving the shift.  A simultaneous remote-work action or
+            # a now-repaired vehicle means the transit itinerary is not used.
+            for expense in conditional_shift_expenses.get(current, []):
+                supports_current_shift = shift_id in expense.supported_shift_ids
+                other_preserver = any(
+                    action_id != expense.action_id
+                    for action_id in preserve_actions_by_shift.get(shift_id, set())
+                )
+                if not supports_current_shift or vehicle_usable or other_preserver:
+                    continue
+                crisis_balance -= expense.amount_cents
+                constrained_cash = max(0, constrained_cash - expense.amount_cents)
+                events.append(
+                    FinancialEvent(
+                        id=expense.ledger_id,
+                        date=current,
+                        type="action_expense",
+                        signed_amount_cents=-expense.amount_cents,
+                        description=expense.description,
+                        source="recovery_action",
+                        status="scenario_assumption",
+                    )
+                )
 
         # Payroll arrives after the morning shift and pays the prior Monday-Sunday period.
         if current in payday_dates:

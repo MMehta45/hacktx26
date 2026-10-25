@@ -13,6 +13,7 @@ from app.research_agent import (
     _extract_with_retry,
     _ground_transport_candidate,
     _mechanic_shortlist,
+    _transit_calls,
     research_with_agent,
 )
 from app.research_graph import rank_targets
@@ -20,6 +21,7 @@ from app.research_models import (
     CandidateAction,
     Evidence,
     PriorityTarget,
+    ResearchContext,
     ResearchRequest,
     clean_url,
 )
@@ -36,6 +38,15 @@ def crisis():
         default_request(),
         actions=[],
     )
+
+
+def test_transit_calls_use_shift_start_arrival_and_fifteen_minute_return_buffer() -> None:
+    result = crisis()
+    calls = _transit_calls(ResearchContext(), result, 2)
+    outbound = calls[0][1]
+    returning = calls[1][1]
+    assert outbound["arrive_by_iso"].endswith("08:00:00-05:00")
+    assert returning["depart_at_iso"].endswith("16:15:00-05:00")
 
 
 def extraction_json(candidate_id: str = "candidate-valid") -> str:
@@ -238,6 +249,23 @@ def test_api_success_is_typed_and_simulator_receives_no_actions(
     assert calls == [[]]
 
 
+def test_unconfigured_research_still_exposes_scoped_demo_route_5(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import research_service
+
+    monkeypatch.setattr(research_service, "get_snapshot", lambda **kwargs: example_snapshot())
+    result = run_research(
+        ResearchRequest(scenario=default_request()),
+        Settings(_env_file=None, gemini_api_key=None, serpapi_api_key=None),
+    ).research
+    demo = [item for item in result.evidence if item.provider_engine == "demo_scenario_assumption"]
+    assert result.status == "not_configured"
+    assert demo
+    assert all(item.fare_certainty == "demo_scenario_assumption" for item in demo)
+    assert all("not provider-observed" in item.limitations[0] for item in demo)
+
+
 def test_serp_fare_observed_only_when_returned() -> None:
     provider = SerpResearch(
         "fake",
@@ -260,6 +288,32 @@ def test_serp_fare_observed_only_when_returned() -> None:
         {"origin": "A", "destination": "B", "arrive_by_iso": "2026-10-26T09:00:00-05:00"},
     )
     assert found[0].observed_cost_cents == 3000
+    assert found[1].observed_cost_cents is None
+
+
+def test_valid_missing_fare_uses_published_capmetro_fallback_but_late_route_stays_unknown() -> None:
+    provider = SerpResearch(
+        "fake",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "places_info": [{"address": "A"}, {"address": "B"}],
+                        "directions": [
+                            {"travel_mode": "Transit", "start_time": "7:00 AM", "end_time": "7:40 AM", "trips": [{"travel_mode": "Transit", "title": "Route 5"}]},
+                            {"travel_mode": "Transit", "start_time": "12:00 PM", "end_time": "12:40 PM", "trips": [{"travel_mode": "Transit", "title": "Route 801"}]},
+                        ],
+                    },
+                )
+            )
+        ),
+    )
+    found = provider.search("find_transit", {"origin": "A", "destination": "B", "arrive_by_iso": "2026-10-26T07:50:00-05:00"})
+    assert found[0].transit_time_constraint_honored is True
+    assert found[0].observed_cost_cents == 125
+    assert found[0].fare_certainty == "official_published"
+    assert found[1].transit_time_constraint_honored is False
     assert found[1].observed_cost_cents is None
 
 
@@ -767,6 +821,8 @@ def test_numeric_transit_seconds_and_nested_stop_times_are_normalized() -> None:
     assert route.fare_source == "SerpApi Google Maps Directions cost field"
     assert route.fare_certainty == "provider_observed"
     assert route.transit_time_constraint_honored is True
+    assert "travelmode=transit" in (route.url or "")
+    assert "arrive_by" not in (route.url or "")
 
 
 def test_reviews_without_price_language_do_not_imply_affordability() -> None:

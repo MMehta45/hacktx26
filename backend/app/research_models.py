@@ -182,7 +182,9 @@ class Evidence(ApiModel):
     boarding_stop: str | None = None
     alighting_stop: str | None = None
     fare_source: str | None = None
-    fare_certainty: Literal["provider_observed", "official_published", "unknown"] | None = None
+    fare_certainty: Literal[
+        "provider_observed", "official_published", "demo_scenario_assumption", "unknown"
+    ] | None = None
     transit_legs: list[TransitLeg] = Field(default_factory=list)
 
     @field_validator("url")
@@ -209,6 +211,7 @@ class Evidence(ApiModel):
         if self.observed_cost_cents is None and self.fare_certainty in {
             "provider_observed",
             "official_published",
+            "demo_scenario_assumption",
         }:
             raise ValueError("Known transit fare certainty requires an amount.")
         if self.observed_cost_cents is not None and self.fare_certainty in {None, "unknown"}:

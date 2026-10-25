@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.demo_transit import maya_route_5_fixture
 from app.financial_analysis import analyze_financial_opportunities
 from app.fixtures import upcoming_bills
 from app.main import app
@@ -16,6 +17,7 @@ from app.recovery_models import (
 from app.recovery_service import (
     RecoveryVersionConflict,
     _sessions,
+    _transit_actions,
     create_session,
     evaluate_session,
     submit_answer,
@@ -74,6 +76,83 @@ def test_duplicate_shift_coverage_recovers_wages_once() -> None:
     payroll = next(item for item in result.payroll_records if item.payday == date(2026, 11, 6))
     assert payroll.actual_projected_take_home_cents == 12_800
     assert payroll.worked_shift_count == 1
+
+
+def test_demo_route_5_is_quantified_and_only_charged_when_it_is_used() -> None:
+    snapshot = example_snapshot(balance_cents=0)
+    request = default_request(forecast_horizon_days=14, repair_quote_cents=150_000)
+    baseline = simulate(snapshot, request)
+    evidence = maya_route_5_fixture("Maya Rodriguez", ResearchContext(), baseline)
+    actions, requirements = _transit_actions(baseline, evidence)
+    assert evidence and all(item.fare_certainty == "demo_scenario_assumption" for item in evidence)
+    assert actions and requirements[0].id == "transit_personally_usable"
+    route_5 = actions[0]
+    assert route_5.evidence_status == "demo_scenario_assumption"
+    transit_expenses = [effect for effect in route_5.effects if isinstance(effect, ExpenseEffect)]
+    transit_shifts = [effect for effect in route_5.effects if isinstance(effect, PreserveShiftEffect)]
+    assert len(transit_expenses) == len(transit_shifts) > 1
+    assert sum(effect.amount_cents for effect in transit_expenses) == 250 * len(transit_expenses)
+
+    with_transit = simulate(snapshot, request, actions=route_5.effects)
+    first_shift = baseline.shift_records[0]
+    assert next(item for item in with_transit.shift_records if item.id == first_shift.id).attendance == "worked"
+    assert any(
+        item.id == f"transit-cost-{first_shift.date.isoformat()}"
+        and item.date == first_shift.date
+        and item.signed_amount_cents == -250
+        for item in with_transit.events
+    )
+    transit_fares = [item for item in with_transit.events if item.id.startswith("transit-cost-")]
+    assert 0 < len(transit_fares) <= len(transit_expenses)
+    assert all(
+        next(shift for shift in with_transit.shift_records if shift.date == fare.date).attendance == "worked"
+        for fare in transit_fares
+    )
+
+    remote_same_shift = PreserveShiftEffect(
+        effect_id="remote-same-shift", action_id="remote", shift_ids=[first_shift.id]
+    )
+    overlapping = simulate(snapshot, request, actions=[*route_5.effects, remote_same_shift])
+    assert not any(item.id == f"transit-cost-{first_shift.date.isoformat()}" for item in overlapping.events)
+
+
+def test_demo_route_5_does_not_leak_to_other_customers_or_addresses() -> None:
+    baseline = simulate(example_snapshot(), default_request())
+    assert not maya_route_5_fixture("Someone Else", ResearchContext(), baseline)
+    assert not maya_route_5_fixture(
+        "Maya Rodriguez", ResearchContext(home_location="1 Main St, Austin, TX"), baseline
+    )
+
+
+def test_ranked_plans_retain_a_quantified_transportation_option(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import recovery_service
+
+    snapshot = example_snapshot(bills=upcoming_bills(date(2026, 10, 24)))
+    baseline = simulate(snapshot, default_request(forecast_horizon_days=30))
+    evidence = maya_route_5_fixture("Maya Rodriguez", ResearchContext(), baseline)
+    monkeypatch.setattr(recovery_service, "get_snapshot", lambda **kwargs: snapshot)
+    session = create_session(
+        CreateRecoverySessionRequest(
+            scenario=default_request(forecast_horizon_days=30),
+            research={
+                "status": "partial", "run_id": "route-5", "simulation_fingerprint": research_fingerprint(
+                    simulation=baseline, scenario=default_request(forecast_horizon_days=30), context=ResearchContext(),
+                ), "research_started_at": "2026-10-25T12:00:00Z", "research_finished_at": "2026-10-25T12:00:01Z",
+                "priority_targets": [], "research_events": [], "evidence": [item.model_dump(mode="json") for item in evidence],
+                "candidate_actions": [], "tool_calls_used": 0, "cache_hits": 0,
+            },
+        ),
+        Settings(_env_file=None, demo_data_mode="fixture"),
+    )
+    route = [item for item in session.candidate_actions if item.strategy == "transportation"]
+    assert route and all(item.quantified for item in route)
+    categories = {tuple(sorted(plan.strategy_labels)) for plan in session.evaluation.plans}
+    assert ("transportation",) in categories
+    assert ("income_preservation",) in categories
+    assert ("income_preservation", "transportation") in categories
+    assert len(session.evaluation.plans) > 3
 
 
 def test_expense_and_unrestricted_assistance_are_dated_once() -> None:
@@ -258,6 +337,36 @@ def test_confirmed_remote_answers_change_feasibility_and_finances(monkeypatch: p
     assert remote.feasibility == "ready_with_confirmed_conditions"
     assert remote.delta.recovered_shift_ids
     assert remote.delta.income_preserved_cents >= 64_000
+
+
+def test_remote_yes_not_yet_no_yes_reverses_requirement_and_financial_effects(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _session(monkeypatch)
+    def answer(value):
+        nonlocal session
+        session = submit_answer(session.id, SubmitAnswerRequest(session_version=session.version, question_id="question-remote-possible", value=value))
+        return session
+    assert next(item for item in answer(True).requirements if item.id == "remote_personally_possible").status == "possible"
+    session = answer("not_yet")
+    assert next(item for item in session.requirements if item.id == "remote_personally_possible").status == "unknown"
+    assert next(item for item in session.evaluation.plans if "action-remote-work" in item.action_ids).feasibility != "ready_with_confirmed_conditions"
+    session = answer(False)
+    assert next(item for item in session.requirements if item.id == "remote_personally_possible").status == "rejected"
+    session = answer(True)
+    assert next(item for item in session.requirements if item.id == "remote_personally_possible").status == "possible"
+
+
+def test_unknown_remote_work_keeps_conditional_action_and_creates_inquiry_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+    session = _session(monkeypatch)
+    session = submit_answer(
+        session.id,
+        SubmitAnswerRequest(session_version=session.version, question_id="question-remote-possible", value="not_yet"),
+    )
+    requirement = next(item for item in session.requirements if item.id == "remote_personally_possible")
+    assert requirement.status == "unknown"
+    draft = next(item for item in session.outreach_drafts if item.id == "draft-remote-work")
+    assert "whether temporary remote work is permitted" in draft.body
+    assert "equipment" in draft.body
+    assert any(item.id == "action-remote-work" for item in session.candidate_actions)
 
 
 def test_session_versions_and_ranking_are_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:

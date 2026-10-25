@@ -78,19 +78,20 @@ def _requirement(
     )
 
 
-def _remote_draft(shift_dates: list[date]) -> OutreachDraft:
+def _remote_draft(shift_dates: list[date], *, inquiry: bool = False, equipment_confirmed: bool = False) -> OutreachDraft:
     listed = ", ".join(value.strftime("%A, %B %-d") for value in shift_dates)
     return OutreachDraft(
         id="draft-remote-work",
         candidate_id="action-remote-work",
         kind="remote_work_request",
         recipient="Maya's manager at Cedarstone Services",
-        subject="Temporary remote-work request",
+        subject="Question about temporary remote-work options" if inquiry else "Temporary remote-work request",
         body=(
-            "Hi, my vehicle is temporarily unavailable. Could I please work remotely on "
-            f"{listed}? I can remain available during my normal 08:00–16:00 shift and will "
-            "confirm that I have the required equipment and system access. Please let me know "
-            "whether these specific dates can be approved. Thank you."
+            "Hello,\n\nMy vehicle is temporarily unavailable. "
+            + ("Could you let me know whether temporary remote work is permitted for " if inquiry else "Could I please work remotely on ")
+            + f"{listed}? I can remain available during my normal 08:00–16:00 shift and perform my usual responsibilities. "
+            + ("I have the required equipment and system access. " if equipment_confirmed else "Please let me know the equipment, system-access, and approval requirements. ")
+            + "Please let me know whether these dates can be approved and the appropriate next step.\n\nThank you,\nMaya"
         ),
     )
 
@@ -121,6 +122,15 @@ def _base_questions() -> list[RecoveryQuestion]:
             requirement_ids=["remote_personally_possible"],
             candidate_ids=["action-remote-work"],
             priority_score=27,
+        ),
+        RecoveryQuestion(
+            id="question-transit-usable",
+            prompt="Would you be able to take Route 5 to work on the listed days?",
+            answer_type="yes_no",
+            reason="The Route 5 schedule and fare are a synthetic demo assumption; Maya's personal ability to use it remains separate.",
+            requirement_ids=["transit_personally_usable"],
+            candidate_ids=["action-transit-route-5"],
+            priority_score=26,
         ),
         RecoveryQuestion(
             id="question-rent-considered",
@@ -250,23 +260,48 @@ def _transit_actions(
             continue
         costs = [outbound.observed_cost_cents, returning.observed_cost_cents]
         if any(value is None for value in costs):
+            action_id = f"action-transit-lead-{shift.date.isoformat()}"
+            requirement_id = "transit_fare_known"
+            requirements.append(_requirement(requirement_id, action_id, "A supported fare assumption is available for both journeys."))
+            actions.append(RecoveryActionDefinition(
+                id=action_id,
+                title=f"Investigate the verified transit timing on {shift.date:%b %-d}",
+                strategy="transportation",
+                description="Timing covers this shift, but one or more fares are unresolved; confirm the applicable CapMetro fare before counting a financial benefit.",
+                effects=[], requirement_ids=[requirement_id], evidence_ids=[outbound.id, returning.id],
+                next_steps=["Confirm the published or provider-observed fare for both journeys."], quantified=False,
+                evidence_status="insufficient_schedule_evidence",
+            ))
             continue
+        is_demo_assumption = (
+            outbound.fare_certainty == "demo_scenario_assumption"
+            and returning.fare_certainty == "demo_scenario_assumption"
+        )
         action_id = f"action-transit-{shift.date.isoformat()}"
         requirement_id = "transit_personally_usable"
         requirements.append(
             _requirement(
                 requirement_id,
                 action_id,
-                "Maya reports that she can use the verified transit itinerary.",
+                "Maya reports that she can use this Route 5 itinerary.",
             )
         )
         total = sum(value or 0 for value in costs)
         actions.append(
             RecoveryActionDefinition(
                 id=action_id,
-                title=f"Use the verified transit round trip on {shift.date:%b %-d}",
+                title=(
+                    f"Use demo Route 5 round trip on {shift.date:%b %-d}"
+                    if is_demo_assumption
+                    else f"Use the verified transit round trip on {shift.date:%b %-d}"
+                ),
                 strategy="transportation",
-                description="Provider-backed outbound and return timing covers this exact shift; personal usability remains unconfirmed.",
+                description=(
+                    "Synthetic demo assumption: Route 5 departs 07:35, arrives near work at 07:52, and has a 16:17 return departure. "
+                    "The $2.50 round trip is modeled only if Maya confirms she can use it."
+                    if is_demo_assumption
+                    else "Provider-backed outbound and return timing covers this exact shift; personal usability remains unconfirmed."
+                ),
                 effects=[
                     PreserveShiftEffect(
                         effect_id=f"effect-transit-shift-{shift.date.isoformat()}",
@@ -274,7 +309,7 @@ def _transit_actions(
                         shift_ids=[shift.id],
                         requirement_ids=[requirement_id],
                         evidence_ids=[outbound.id, returning.id],
-                        certainty="provider_observed",
+                        certainty="conditional" if is_demo_assumption else "provider_observed",
                     ),
                     ExpenseEffect(
                         effect_id=f"effect-transit-cost-{shift.date.isoformat()}",
@@ -282,19 +317,63 @@ def _transit_actions(
                         ledger_id=f"transit-cost-{shift.date.isoformat()}",
                         amount_cents=total,
                         date=shift.date,
-                        description=f"Provider-observed transit fare for {shift.date.isoformat()}",
+                        description=(
+                            f"Demo Route 5 round-trip fare for {shift.date.isoformat()}"
+                            if is_demo_assumption
+                            else f"Provider-observed transit fare for {shift.date.isoformat()}"
+                        ),
                         supported_shift_ids=[shift.id],
+                        charge_only_when_needed_for_supported_shift=True,
                         requirement_ids=[requirement_id],
                         evidence_ids=[outbound.id, returning.id],
-                        certainty="provider_observed",
+                        certainty="conditional" if is_demo_assumption else "provider_observed",
                     ),
                 ],
                 requirement_ids=[requirement_id],
                 evidence_ids=[outbound.id, returning.id],
-                next_steps=["Confirm personal ability to use this itinerary.", "Recheck service alerts before travel."],
-                evidence_status="verified_route_feasible",
+                next_steps=(
+                    ["Confirm personal ability to use Route 5.", "Use the linked map only as a manual navigation aid; recheck service before travel."]
+                    if is_demo_assumption
+                    else ["Confirm personal ability to use this itinerary.", "Recheck service alerts before travel."]
+                ),
+                evidence_status="demo_scenario_assumption" if is_demo_assumption else "verified_route_feasible",
             )
         )
+    # The deterministic fixture is one offered commute strategy, not a set of
+    # one-day recommendations. Its preserve/expense effects remain dated.
+    demo_actions = [action for action in actions if action.evidence_status == "demo_scenario_assumption"]
+    if demo_actions:
+        action_id = "action-transit-route-5"
+        demo_effects = [effect for action in demo_actions for effect in action.effects]
+        demo_evidence_ids = list(dict.fromkeys(
+            evidence_id for action in demo_actions for evidence_id in action.evidence_ids
+        ))
+        actions = [action for action in actions if action not in demo_actions]
+        actions.append(RecoveryActionDefinition(
+            id=action_id,
+            title="Use demo CapMetro Route 5 while the car is unavailable",
+            strategy="transportation",
+            description=(
+                "Synthetic demo assumption: Route 5 departs at 07:35, arrives near work at 07:52, "
+                "and has a 16:17 return departure. Each used round trip costs $2.50. "
+                "Fares stop after repair and are skipped on remote-work days."
+            ),
+            effects=[effect.model_copy(update={"action_id": action_id}) for effect in demo_effects],
+            requirement_ids=["transit_personally_usable"],
+            evidence_ids=demo_evidence_ids,
+            next_steps=[
+                "Confirm personal ability to use Route 5 on the listed weekday shifts.",
+                "Use Route 5 only while the vehicle remains unavailable.",
+                "Map links are navigation aids; the schedule and fare are demo assumptions.",
+            ],
+            evidence_status="demo_scenario_assumption",
+        ))
+        requirements = [
+            requirement.model_copy(update={"candidate_ids": [action_id]})
+            if requirement.id == "transit_personally_usable" else requirement
+            for requirement in requirements
+        ]
+
     deduped: dict[str, RecoveryRequirement] = {}
     for requirement in requirements:
         existing = deduped.get(requirement.id)
@@ -375,6 +454,15 @@ def _initial_actions(
     if research:
         evidence_by_id = {item.id: item for item in research.evidence}
         for candidate in research.candidate_actions:
+            # The deterministic remote-work family already owns this mechanism;
+            # retain its research provenance on that action instead of exposing
+            # a duplicate unquantified "21 shifts" lead.
+            if candidate.mechanism == "income_preservation":
+                remote = next((item for item in actions if item.id == "action-remote-work"), None)
+                if remote:
+                    remote.evidence_ids = list(dict.fromkeys([*remote.evidence_ids, *candidate.evidence_ids]))
+                    remote.next_steps = list(dict.fromkeys([*remote.next_steps, *candidate.remaining_unknowns]))
+                    continue
             if candidate.mechanism == "repair_affordability":
                 cited = [
                     evidence_by_id[item]
@@ -438,6 +526,27 @@ def _candidate_summary(
     )
 
 
+def _actionable_resources(research: ResearchResult | None) -> list[PlanResource]:
+    if not research:
+        return []
+    evidence = {item.id: item for item in research.evidence}
+    resources: list[PlanResource] = []
+    for candidate in research.candidate_actions:
+        for evidence_id in candidate.evidence_ids:
+            item = evidence.get(evidence_id)
+            if not item:
+                continue
+            kind = "transit_route" if item.source_type == "transit_directions" else "external_link"
+            resources.append(PlanResource(
+                id=f"opportunity:{candidate.id}:{item.id}", resource_type=kind,
+                title=item.title, action_ids=[candidate.id], evidence_ids=[item.id], url=item.url,
+                date=item.transit_request_date,
+                details=candidate.description,
+                limitations=[*item.limitations, *candidate.remaining_unknowns],
+            ))
+    return resources
+
+
 def _action_feasibility(
     action_ids: Iterable[str], actions: dict[str, RecoveryActionDefinition], requirements: dict[str, RecoveryRequirement]
 ) -> tuple[str, list[str]]:
@@ -457,10 +566,16 @@ def _effects(actions: Iterable[RecoveryActionDefinition]) -> list[RecoveryEffect
     return [effect for action in actions for effect in action.effects]
 
 
-def _incremental_cost(effects: list[RecoveryEffect]) -> int:
-    total = 0
+def _incremental_cost(effects: list[RecoveryEffect], result: object) -> int:
+    # Conditional fares are included only when the simulator actually used the
+    # itinerary; static effect summation would charge an unused transit ride.
+    total = sum(
+        -event.signed_amount_cents
+        for event in result.events
+        if event.type == "action_expense"
+    )
     for effect in effects:
-        if isinstance(effect, ExpenseEffect):
+        if isinstance(effect, ExpenseEffect) and not effect.charge_only_when_needed_for_supported_shift:
             total += effect.amount_cents
         elif isinstance(effect, BillDueDateEffect):
             total += effect.fee_cents
@@ -478,7 +593,18 @@ def _plan_details(selected, action_ids, baseline, result, evidence, drafts):
             details = item.title
             if item.source_type == "transit_directions":
                 routes = ", ".join(item.route_numbers) or "route unknown"
-                details = f"{routes}; fare {item.observed_cost_cents or 0} cents; {item.transit_duration_minutes or '?'} minutes"
+                if item.fare_certainty == "demo_scenario_assumption":
+                    time_text = (
+                        item.transit_departure.strftime("%I:%M %p").lstrip("0")
+                        if item.transit_departure else "time unspecified"
+                    )
+                    arrival_text = (
+                        item.transit_arrival.strftime("%I:%M %p").lstrip("0")
+                        if item.transit_arrival else "return arrival unspecified"
+                    )
+                    details = f"Demo scenario assumption: {routes}; {time_text} → {arrival_text}; $1.25 one way, $2.50 round trip."
+                else:
+                    details = f"{routes}; fare {item.observed_cost_cents or 0} cents; {item.transit_duration_minutes or '?'} minutes"
             resources.append(PlanResource(
                 id=f"resource:{action.id}:{item.id}", resource_type=resource_type,
                 title=item.title, action_ids=[action.id], evidence_ids=[item.id], url=item.url,
@@ -492,7 +618,22 @@ def _plan_details(selected, action_ids, baseline, result, evidence, drafts):
                 title=draft.subject, action_ids=[action.id], details="Copyable draft; not sent or approved.",
                 limitations=[draft.disclaimer],
             ))
-    direct = sorted({shift_id for action in selected for effect in action.effects if isinstance(effect, PreserveShiftEffect) for shift_id in effect.shift_ids})
+    # A multi-day transit offer can contain effects beyond the date on which
+    # repair restores the car. Only a recorded fare proves that transit was the
+    # mechanism actually used for that shift; remote effects remain direct.
+    used_transit_shift_ids = {
+        f"shift-{event.date.isoformat()}"
+        for event in result.events
+        if event.type == "action_expense" and event.id.startswith("transit-cost-")
+    }
+    direct = sorted({
+        shift_id
+        for action in selected
+        for effect in action.effects
+        if isinstance(effect, PreserveShiftEffect)
+        for shift_id in effect.shift_ids
+        if action.strategy != "transportation" or shift_id in used_transit_shift_ids
+    })
     baseline_missed = {item.id for item in baseline.shift_records if item.attendance == "projected_missed"}
     worked_after = {item.id for item in result.shift_records if item.attendance == "worked"}
     recovered = baseline_missed & worked_after
@@ -588,7 +729,7 @@ def _evaluate(
                 ending_balance_change_cents=result.crisis_ending_balance_cents - baseline.crisis_ending_balance_cents,
                 recovered_shift_ids=recovered,
                 income_preserved_cents=income_preserved,
-                incremental_cost_cents=_incremental_cost(effects),
+                incremental_cost_cents=_incremental_cost(effects, result),
                 repair_date_change_days=repair_change,
             )
             source_ids = list(dict.fromkeys(item for action in selected for item in action.evidence_ids))
@@ -665,16 +806,32 @@ def _evaluate(
             )
             evaluated.append((key, plan))
     evaluated.sort(key=lambda item: item[0])
+    ranked = [
+        plan.model_copy(update={"rank": index + 1})
+        for index, (_, plan) in enumerate(evaluated)
+    ]
     diverse: list[RecoveryPlan] = []
     strategy_signatures: set[tuple[str, ...]] = set()
-    for _, plan in evaluated:
+    for plan in ranked:
         signature = tuple(sorted(plan.strategy_labels))
         if signature in strategy_signatures and len(diverse) >= 1:
             continue
-        diverse.append(plan.model_copy(update={"rank": len(diverse) + 1}))
+        diverse.append(plan)
         strategy_signatures.add(signature)
-        if len(diverse) == 3:
+        if len(diverse) == 8:
             break
+    # A quantified transportation option is materially distinct from generic
+    # cash/income plans. Preserve its actual rank even when the three-card
+    # presentation cut would otherwise hide every Route 5 combination.
+    if not any("transportation" in plan.strategy_labels for plan in diverse):
+        transportation_plan = next(
+            (plan for plan in ranked if "transportation" in plan.strategy_labels), None
+        )
+        if transportation_plan:
+            if len(diverse) >= 8:
+                diverse[-1] = transportation_plan
+            else:
+                diverse.append(transportation_plan)
     return RecoveryEvaluation(
         baseline_fingerprint=session.scenario_fingerprint,
         baseline=baseline,
@@ -763,6 +920,7 @@ def create_session(request: CreateRecoverySessionRequest, settings: Settings) ->
         evidence=request.research.evidence if request.research else [],
         research=request.research,
         financial_opportunities=analyze_financial_opportunities(snapshot),
+        actionable_resources=_actionable_resources(request.research),
         candidate_summary=_candidate_summary(actions, request.research),
         evaluation=empty_evaluation,
         warnings=(
@@ -839,8 +997,8 @@ def targeted_research(
                 for shift in missed:
                     if provider.calls - calls_before >= round_budget:
                         break
-                    arrival = datetime.combine(shift.date, context.shift_start_local, zone) - timedelta(minutes=10)
-                    departure = datetime.combine(shift.date, context.shift_end_local, zone) + timedelta(minutes=5)
+                    arrival = datetime.combine(shift.date, context.shift_start_local, zone)
+                    departure = datetime.combine(shift.date, context.shift_end_local, zone) + timedelta(minutes=15)
                     for args in (
                         {
                             "origin": context.home_location,
@@ -962,7 +1120,13 @@ def _activate_remote_draft(session: RecoverySession) -> None:
         return
     effect = next((item for item in action.effects if isinstance(item, PreserveShiftEffect)), None)
     dates = [date.fromisoformat(item.removeprefix("shift-")) for item in effect.shift_ids] if effect else []
-    draft = _remote_draft(dates)
+    equipment = next((item for item in session.requirements if item.id == "remote_equipment"), None)
+    possible = next((item for item in session.requirements if item.id == "remote_personally_possible"), None)
+    draft = _remote_draft(
+        dates,
+        inquiry=possible is None or possible.status == "unknown",
+        equipment_confirmed=equipment is not None and equipment.status == "user_reported_confirmed",
+    )
     session.outreach_drafts = [item for item in session.outreach_drafts if item.id != draft.id]
     session.outreach_drafts.append(draft)
 
@@ -985,22 +1149,31 @@ def submit_answer(
     )
     _upsert_answer(session, answer)
     yes = request.value is True
+    unresolved = request.value == "not_yet"
     if request.question_id == "question-remote-possible":
-        _set_requirement(session, "remote_personally_possible", "possible" if yes else "rejected", source="user_answer", established_by=answer.question_id)
-        _set_requirement(session, "remote_manager_approval", "pending_external_approval" if yes else "rejected", source="user_answer", established_by=answer.question_id)
-        if yes:
+        _set_requirement(session, "remote_personally_possible", "possible" if yes else "unknown" if unresolved else "rejected", source="user_answer", established_by=answer.question_id)
+        _set_requirement(session, "remote_manager_approval", "pending_external_approval" if yes else "unknown" if unresolved else "rejected", source="user_answer", established_by=answer.question_id)
+        if yes or unresolved:
             _activate_remote_draft(session)
     elif request.question_id == "question-remote-equipment":
-        _set_requirement(session, "remote_equipment", "user_reported_confirmed" if yes else "rejected", source="user_confirmation", established_by=answer.question_id)
+        _set_requirement(session, "remote_equipment", "user_reported_confirmed" if yes else "unknown" if unresolved else "rejected", source="user_confirmation", established_by=answer.question_id)
+    elif request.question_id == "question-transit-usable":
+        _set_requirement(
+            session,
+            "transit_personally_usable",
+            "possible" if yes else "unknown" if unresolved else "rejected",
+            source="user_answer",
+            established_by=answer.question_id,
+        )
     elif request.question_id == "question-remote-approved":
         action = next(item for item in session.candidate_actions if item.id == "action-remote-work")
         effect = next(item for item in action.effects if isinstance(item, PreserveShiftEffect))
         dates = [date.fromisoformat(item.removeprefix("shift-")) for item in effect.shift_ids]
-        _set_requirement(session, "remote_manager_approval", "user_reported_confirmed" if yes else "rejected", source="user_confirmation", established_by=answer.question_id, effective_dates=dates if yes else [])
+        _set_requirement(session, "remote_manager_approval", "user_reported_confirmed" if yes else "pending_external_approval" if unresolved else "rejected", source="user_confirmation", established_by=answer.question_id, effective_dates=dates if yes else [])
     elif request.question_id == "question-subscription-pause":
-        _set_requirement(session, "subscription_cancellation", "user_reported_confirmed" if yes else "rejected", source="user_confirmation", established_by=answer.question_id)
+        _set_requirement(session, "subscription_cancellation", "user_reported_confirmed" if yes else "unknown" if unresolved else "rejected", source="user_confirmation", established_by=answer.question_id)
     elif request.question_id == "question-rent-considered":
-        _set_requirement(session, "rent_extension_approval", "pending_external_approval" if yes else "rejected", source="user_answer", established_by=answer.question_id)
+        _set_requirement(session, "rent_extension_approval", "pending_external_approval" if yes else "unknown" if unresolved else "rejected", source="user_answer", established_by=answer.question_id)
         if yes:
             rent = next((item for item in stored.snapshot.upcoming_bills if item.category == "Housing/Rent"), None)
             if rent:
@@ -1011,7 +1184,7 @@ def submit_answer(
         _set_requirement(
             session,
             "rent_extension_approval",
-            "possible" if yes else "rejected",
+            "possible" if yes else "pending_external_approval" if unresolved else "rejected",
             source="user_answer",
             established_by=answer.question_id,
         )
@@ -1046,6 +1219,13 @@ def submit_answer(
         session.candidate_actions = [item for item in session.candidate_actions if item.id != action.id] + [action]
         _set_requirement(session, "rent_extension_approval", "user_reported_confirmed", source="user_confirmation", established_by=answer.question_id, effective_dates=[new_date])
     elif request.question_id == "question-written-quote":
+        if unresolved:
+            _set_requirement(session, "written_repair_quote", "unknown", source="user_answer", established_by=answer.question_id)
+            session.version += 1
+            session.updated_at = datetime.now(UTC)
+            session.evaluation = _evaluate(stored)
+            session.next_question_ids = _refresh_questions(session)
+            return session
         dollars = int(request.value)
         if dollars <= 0:
             raise ValueError("Repair quote must be a positive dollar amount.")
@@ -1067,6 +1247,13 @@ def submit_answer(
         )
         session.candidate_actions = [item for item in session.candidate_actions if item.id != action.id] + [action]
     elif request.question_id == "question-repair-appointment":
+        if unresolved:
+            _set_requirement(session, "repair_appointment", "unknown", source="user_answer", established_by=answer.question_id)
+            session.version += 1
+            session.updated_at = datetime.now(UTC)
+            session.evaluation = _evaluate(stored)
+            session.next_question_ids = _refresh_questions(session)
+            return session
         appointment = date.fromisoformat(str(request.value))
         action = next((item for item in session.candidate_actions if item.id == "action-alternative-repair"), None)
         if not action:

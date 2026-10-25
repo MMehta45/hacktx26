@@ -38,7 +38,8 @@ class RecoveryRequirement(ApiModel):
 
 class RecoveryAnswer(ApiModel):
     question_id: str
-    value: bool | int | str | list[date]
+    # `not_yet` is explicit unresolved state; it is not false/empty/zero.
+    value: Literal["not_yet"] | bool | int | str | list[date]
     clarification: str | None = Field(default=None, max_length=500)
     submitted_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
@@ -93,6 +94,7 @@ class RecoveryActionDefinition(ApiModel):
     quantified: bool = True
     evidence_status: Literal[
         "verified_route_feasible",
+        "demo_scenario_assumption",
         "conditionally_feasible",
         "route_infeasible",
         "insufficient_schedule_evidence",
@@ -182,7 +184,7 @@ class RecoveryEvaluation(ApiModel):
     baseline: SimulationResult
     evaluated_plan_count: int = Field(ge=0)
     pruned_combination_count: int = Field(ge=0)
-    plans: list[RecoveryPlan] = Field(max_length=3)
+    plans: list[RecoveryPlan] = Field(max_length=8)
 
 
 class FinancialOpportunity(ApiModel):
@@ -231,6 +233,7 @@ class RecoverySession(ApiModel):
     # Immutable Explore payload retained for traceability and Build 04 follow-up questions.
     research: ResearchResult | None = None
     financial_opportunities: list[FinancialOpportunity] = Field(default_factory=list)
+    actionable_resources: list[PlanResource] = Field(default_factory=list)
     candidate_summary: CandidateSummary = Field(default_factory=CandidateSummary)
     evaluation: RecoveryEvaluation
     research_calls_used: int = Field(default=0, ge=0)
@@ -247,7 +250,7 @@ class CreateRecoverySessionRequest(ApiModel):
 class SubmitAnswerRequest(ApiModel):
     session_version: int = Field(ge=1)
     question_id: str
-    value: bool | int | str | list[date]
+    value: Literal["not_yet"] | bool | int | str | list[date]
     clarification: str | None = Field(default=None, max_length=500)
 
 

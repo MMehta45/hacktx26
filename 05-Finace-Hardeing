@@ -1,0 +1,931 @@
+# Build 05 — Financial Integrity, Outstanding Liabilities & Recovery Ranking
+
+**Repository:** `MMehta45/hacktx26`
+
+**Priority:** Critical — HackTX final logic build
+
+## Objective
+
+One Bad Tuesday now has a working deterministic crisis simulator, Gemini/SerpApi research, Route 5 transportation, interactive questions, financial interventions, and multiple recovery strategies.
+
+However, the latest financial audit identified several problems:
+
+1. Recovery ranking overprioritizes small immediate savings compared with interventions that preserve substantial future income.
+2. Historical variable living expenses aren't represented in forward cash projections.
+3. Unpaid bills are recorded at their due dates but not properly carried forward as outstanding liabilities.
+4. Raw projected balances can be confused with real spendable cash.
+5. Income preserved, income earned, income received, and projected future payroll are not sufficiently distinguished.
+6. Some plan statistics are mathematically valid but misleading without timing and context.
+7. Existing financial effect types are more extensive than the actions currently surfaced by the agent.
+8. The interface needs clearer financial explanations, but not a major visual redesign.
+
+This build should implement the accounting and ranking corrections together, end to end.
+
+**Primary goal:** Every displayed financial outcome must reconcile, and the recommended strategy should reflect both immediate financial survival and long-term recovery.
+
+Do not replace the simulator, rewrite unrelated research logic, or overhaul the UI.
+
+---
+
+# 1. Audit the existing financial ledger before editing
+
+Inspect:
+
+- `backend/app/simulation.py`
+- `backend/app/simulation_models.py`
+- `backend/app/recovery_service.py`
+- `backend/app/recovery_models.py`
+- `backend/app/fixtures.py`
+- `backend/app/models.py`
+- `backend/app/snapshot.py`
+- Financial snapshot construction
+- Relevant frontend components/types
+- Existing tests
+
+Trace the complete sequence:
+
+`Starting balance → action expenses → scheduled shifts → earned wages → dated payroll → due bills → bill allocation → outstanding liabilities → repair affordability → vehicle availability → later shifts`
+
+Identify the current definitions of:
+
+- Raw projected balance
+- Constrained available cash
+- Peak funding gap
+- Unpaid essential bills
+- Ending cash balance
+- Recovered shifts
+- Income preserved
+- Action cost
+- Repair affordability
+- Outstanding obligations
+
+Document any inconsistencies before changing formulas.
+
+Use integer cents throughout financial calculations.
+
+Preserve deterministic behavior and provenance.
+
+---
+
+# 2. Fix outstanding liabilities — highest financial priority
+
+## Current problem
+
+When Maya cannot fully fund a bill on its due date, the simulator records the unpaid amount.
+
+For example:
+
+- Rent: $135 unpaid
+- Auto insurance: $110 unpaid
+- Total outstanding essentials: $245
+
+But unpaid amounts do not automatically remain reserved or payable obligations in subsequent cash-allocation decisions.
+
+This allows later cash to appear available for spending or vehicle repair even though older essential obligations remain outstanding.
+
+## Required implementation
+
+Introduce a proper **outstanding-liability ledger**.
+
+Each scheduled bill must track:
+
+- Obligation ID
+- Original amount
+- Original due date
+- Amount paid by original due date
+- Amount unpaid at original due date
+- Current outstanding balance
+- Later partial payments
+- Date fully settled, if applicable
+- Essential/discretionary classification
+- Original source and provenance
+- Any approved due-date adjustment
+- Any supported fee or penalty
+
+Maintain the accounting identity:
+
+`OriginalObligation + VerifiedFees − TotalPayments − ValidCredits = OutstandingBalance`
+
+Outstanding balances must never become negative.
+
+## Carry obligations forward
+
+If $135 of rent remains unpaid on November 1:
+
+- Record the missed due-date payment.
+- Carry $135 forward as outstanding rent.
+- Include it in later liability totals.
+- Allow future available cash to settle it according to a defined payment policy.
+- Never silently erase it.
+- Never subtract it twice.
+
+Distinguish:
+
+1. Amount missed at the original due date.
+2. Amount still outstanding today or on each projected date.
+
+Those values are not necessarily equal.
+
+## Payment prioritization
+
+Establish a clear, deterministic policy for available cash.
+
+Default recommendation:
+
+1. Essential obligations currently due.
+2. Overdue essential obligations.
+3. Necessary work-preserving transportation costs.
+4. Other required bills.
+5. Vehicle repair based on the repair/income-preservation tradeoff.
+6. Discretionary expenses.
+
+However, this is a policy preference, not an unquestionable economic law.
+
+The simulator should support financially rational repair-first decisions where paying for the repair could protect enough future earnings to address obligations.
+
+Do not automatically prevent vehicle repair forever whenever there is any past-due bill.
+
+Instead, explicitly model the tradeoff:
+
+- Repair now and protect future income.
+- Pay overdue obligation first and delay repair.
+- Use another transportation arrangement while settling bills.
+
+Keep the policy deterministic and explainable.
+
+## Conservation of cash
+
+Ensure:
+
+`EndingLiquidCash = StartingCash + ActualCashInflows − ActualCashOutflows`
+
+An unpaid bill must not reduce liquid cash unless a payment actually occurs.
+
+It should increase outstanding liabilities instead.
+
+Separate the amount due from the cash paid.
+
+## Required outputs
+
+Return:
+
+- Current liquid cash
+- Total outstanding obligations
+- Outstanding essential obligations
+- Newly missed bills
+- Past-due obligations settled later
+- Ending liquid cash
+- Ending outstanding liabilities
+- Financial position after liabilities
+
+A useful derived statistic is:
+
+`NetPositionAfterLiabilities = LiquidCash − OutstandingLiabilities`
+
+Label it as a simplified net cash position, not total net worth.
+
+Do not subtract outstanding liabilities again from a balance that already assumes all obligations were paid.
+
+---
+
+# 3. Separate three different cash-flow views
+
+Currently the UI uses terms such as "ending raw balance" that can mislead users.
+
+Implement and name three distinct views.
+
+## A. Scheduled-obligation projection
+
+The existing theoretical projection assumes scheduled bills are deducted when due, regardless of whether the account contains enough cash.
+
+This identifies funding needs.
+
+Call this:
+
+**Projected balance after scheduled obligations**
+
+It may become negative.
+
+It is not an actual bank balance or overdraft.
+
+## B. Liquid cash projection
+
+Track the cash that would actually remain after modeled payments.
+
+This must not go negative unless the scenario explicitly enables borrowing or overdraft.
+
+Call this:
+
+**Projected available cash**
+
+Use actual allocated payments.
+
+## C. Outstanding-liability projection
+
+Track all unpaid obligations over time.
+
+Call this:
+
+**Outstanding bills**
+
+This should include:
+
+- Past-due essentials.
+- Past-due discretionary obligations, if applicable.
+- Remaining balances after partial payments.
+- Fees only when modeled with known terms.
+
+These views must reconcile.
+
+### Important
+
+Do not add a raw negative projected balance to an unpaid-bill total and treat them as two independent losses.
+
+That would double-count the same funding need.
+
+---
+
+# 4. Correct the funding-gap metrics
+
+Keep the existing:
+
+`PeakFundingGap = max(0, −min(RawProjectedBalanceOverTime))`
+
+But label it explicitly as the peak **scheduled-obligation funding gap**.
+
+Also introduce:
+
+`OutstandingEssentialAtDate(t) = Σ unpaid essential balances still outstanding at t`
+
+`PeakOutstandingEssential = max_t OutstandingEssentialAtDate(t)`
+
+`EndingOutstandingEssential = OutstandingEssentialAtDate(forecast_end)`
+
+`FirstShortfallDate = first date raw projected balance becomes negative`
+
+`PeakGapDate = date of most negative raw projected balance`
+
+These answer different questions and must not be conflated.
+
+### Example
+
+A plan could:
+
+- Reduce the peak scheduled funding gap only slightly.
+- Preserve $1,920 in income within the forecast.
+- Settle overdue bills later.
+- Repair the car.
+- End with positive cash.
+
+That is financially meaningful even if some obligations were missed initially.
+
+The UI should clearly distinguish **preventing a missed payment** from **recovering after it occurs**.
+
+---
+
+# 5. Correct wage accounting and timing
+
+## Existing assumptions
+
+For default Maya:
+
+- Hourly rate: $20
+- Shift duration: 8 hours
+- Take-home multiplier: 80%
+- Gross per shift: $160
+- Estimated take-home per shift: $128
+- Five scheduled weekdays.
+- Weekly payroll with the existing following-Friday delay.
+
+Preserve these assumptions unless a scenario explicitly changes them.
+
+## Required wage metrics
+
+Separate:
+
+### A. Wages earned
+
+Total take-home earning potential from worked or restored shifts, regardless of whether payday falls within the 30-day horizon.
+
+`EarnedTakeHome = Σ worked_shift_take_home`
+
+### B. Wages received
+
+Actual projected payroll deposits occurring within the forecast horizon.
+
+`ReceivedPayroll = Σ dated_payroll_deposits_within_horizon`
+
+### C. Wages earned but not yet paid
+
+`EarnedButUnpaid = EarnedTakeHome − PayReceivedForThoseShifts`
+
+This must be calculated by shift-to-payday mapping, not by blindly subtracting unrelated historical payroll.
+
+### D. Income preserved by recovery
+
+Break down:
+
+- Directly protected shifts.
+- Indirectly restored shifts after repair.
+- Additional earnings attributable to those shifts.
+- Additional payroll actually received within the horizon.
+- Additional payroll due after the horizon.
+
+## Reconcile Route 5
+
+The latest live scenario showed:
+
+- 21 recovered shifts
+- $1,920 in income preserved within the forecast
+- $25 in bus costs
+- Repair on November 6
+
+At $128 take-home per shift, 21 shifts represent $2,688 in recovered earning potential.
+
+Explain the difference between:
+
+- $2,688 earned potential.
+- $1,920 received within the forecast.
+- Remaining earnings payable after the forecast, subject to actual payroll dates.
+
+Do not hardcode these totals.
+
+Use the actual shift records and associated paydays.
+
+### Timeline
+
+A shift worked on Monday does not increase Monday's checking balance unless there is a separately modeled advance.
+
+Only the corresponding dated payroll increases cash.
+
+This matters critically for rent and insurance due before payday.
+
+---
+
+# 6. Account for routine living expenses
+
+## Current limitation
+
+Historical transactions include categories such as:
+
+- Groceries
+- Dining
+- Transportation/gas
+- Shopping
+- Subscriptions
+- Utilities
+- Insurance
+- Health
+
+But the forecast currently relies primarily on five scheduled bills.
+
+This can overstate Maya's apparent future financial capacity.
+
+## Implement conservative forward projections
+
+Use historical spending as a starting point for estimated variable expenses.
+
+Separate:
+
+### Fixed obligations
+
+Rent, utilities, insurance, and explicitly scheduled subscriptions.
+
+### Essential variable spending
+
+Groceries, required commuting, essential medication/health costs when supported.
+
+### Discretionary variable spending
+
+Dining, shopping, nonessential entertainment, and other categories with evidence of discretionary activity.
+
+## Estimate frequency and amount
+
+For categories with adequate historical evidence:
+
+`EstimatedDailySpending(category) = HistoricalCategorySpend / ObservedDays`
+
+or a documented weekly estimate when that better matches transaction patterns.
+
+Do not automatically divide by 90 if the actual observation period differs.
+
+Use available transaction dates and observation-window metadata.
+
+Avoid treating a single anomalous purchase as a reliable recurring expense.
+
+## Avoid duplicates
+
+Exclude or reconcile transactions that correspond to explicit forecast bills.
+
+For example:
+
+- Scheduled rent must not also be forecast through historical rent averages.
+- Streaming renewal must not be counted twice.
+- Gas expenses should be adjusted when the car is unusable.
+- Bus expenses should be added only for actual transit days.
+
+## Avoid false precision
+
+Historical averages are estimates, not contractual obligations.
+
+Each projected variable expense needs:
+
+- Category
+- Estimated amount
+- Timing basis
+- Confidence
+- Source transaction IDs
+- Clear estimated status
+
+## Scenario treatment
+
+Prefer using variable-spending projections in a separate **living-expense-adjusted forecast** rather than silently overwriting all existing scheduled-bill results.
+
+Support at least:
+
+1. Scheduled bills only — existing reference baseline.
+2. Essential living expenses included — more realistic survival projection.
+3. Supported discretionary spending included — fuller behavioral projection.
+
+Make the distinction visible in outputs and tests.
+
+Do not force discretionary spending into the projection if no valid historical basis exists.
+
+### Important
+
+A grocery budget cannot automatically be reduced to zero simply because Maya is in financial trouble.
+
+Protect a reasonable estimated essential-spending floor.
+
+---
+
+# 7. Revisit vehicle repair affordability
+
+## Current behavior
+
+The simulator follows a bill-protective repair policy and determines when enough cash is available to pay the repair while protecting certain future essentials.
+
+That mechanism is real, but the decision policy is heuristic.
+
+## Required improvements
+
+Evaluate repair affordability using:
+
+- Available liquid cash.
+- Outstanding essential obligations.
+- Upcoming essential obligations.
+- Necessary living-expense reserve.
+- Expected income timing.
+- Whether transportation alternatives preserve employment.
+- Cost of delaying repair.
+- Cost of immediately paying for repair.
+
+Avoid using a theoretical raw balance as though it were spendable money.
+
+### Compare repair strategies
+
+Where appropriate, calculate:
+
+**Repair-first:** Pay repair sooner, potentially preserve future wages.
+
+**Obligations-first:** Pay past-due essentials first, potentially delay repair.
+
+**Transport-first:** Use Route 5 temporarily, preserve work, and repair when financially viable.
+
+Do not introduce unverified financing or fictional assistance.
+
+Any comparison must use the same underlying ledger and assumptions.
+
+### Feedback-loop safety
+
+The repair decision changes future attendance, which changes future payroll and cash availability.
+
+Maintain deterministic chronological simulation.
+
+Ensure:
+
+- No circular double-counting.
+- Same-day repairs don't restore earlier shifts.
+- Repair payment is charged once.
+- Repair availability only changes from the modeled restoration date.
+- Outstanding bills are not erased by repair.
+
+---
+
+# 8. Fix recovery ranking
+
+## Current problem
+
+The optimizer ranks:
+
+1. Feasibility.
+2. Unpaid essential dollar amount.
+3. Unpaid bill count.
+4. Peak funding gap.
+5. Recovered shifts.
+6. Transportation/action cost.
+
+Consequently, a confirmed $15 subscription cancellation can outrank a Route 5 strategy preserving 21 shifts and substantial income.
+
+That may follow the existing sorting rules, but it is not a compelling measure of recovery.
+
+## Required approach
+
+Do not replace the existing objective with a simplistic "maximize ending balance" formula.
+
+Instead, evaluate plans across distinct dimensions.
+
+### Immediate stability
+
+- Essential bills protected by due date.
+- Peak funding gap.
+- Near-term liquidity.
+- Risk of immediate service disruption.
+- Outstanding essential obligations.
+
+### Income preservation and recovery
+
+- Shifts preserved.
+- Earnings preserved.
+- Dated payroll received.
+- Repair/restoration timing.
+- Future shifts no longer at risk.
+
+### Overall financial outcome
+
+- Ending liquid cash.
+- Ending outstanding liabilities.
+- Net cash position after liabilities.
+- Incremental transportation/repair costs.
+- Remaining unaddressed consequences.
+
+### Feasibility
+
+- Confirmed requirements.
+- Pending approvals.
+- Unknown dependencies.
+- Number and difficulty of unresolved steps.
+- Provider-backed versus synthetic assumptions.
+
+## Avoid comparing certainty with impact incorrectly
+
+A confirmed $15 cancellation and a conditional $1,920 income-preservation strategy shouldn't be treated as equivalent alternatives.
+
+Maintain two separate evaluations:
+
+**Confirmed/actionable outcome**
+
+Only effects whose required conditions have been satisfied.
+
+**Conditional upside**
+
+What would happen if specified outstanding requirements succeeded.
+
+Clearly distinguish these outcomes.
+
+Do not credit conditional benefits to confirmed cash flow.
+
+## Ranking design
+
+Implement a transparent ranking method that:
+
+- Prioritizes significant prevention of financial harm.
+- Considers both short-term and long-term effects.
+- Penalizes additional costs and unresolved dependencies appropriately.
+- Avoids letting a tiny improvement dominate a much larger recovery solely because of a small funding-gap difference.
+- Does not allow a speculative action with unknown benefits to outrank evidenced executable options.
+- Does not hardcode Route 5 as Plan 1.
+
+A weighted score, lexicographic tiers with impact thresholds, or another explainable multi-objective method is acceptable.
+
+Document the actual choice.
+
+Do not produce arbitrary or fabricated probabilities.
+
+### Strategy diversity
+
+Preserve at least the existing viable families:
+
+- Transit-only.
+- Remote-only.
+- Hybrid.
+- Spending reduction.
+- Bill flexibility.
+- Assistance or repair alternatives when executable.
+
+Continue displaying more than three strategies when meaningful.
+
+Avoid near-duplicate plans whose differences don't materially change outcomes.
+
+Show why each recommended plan ranked where it did.
+
+---
+
+# 9. Correct plan headlines and statistic descriptions
+
+This is a content-clarity pass, not a visual redesign.
+
+## Replace confusing language
+
+Avoid:
+
+- "Ending raw balance"
+- "Income preserved" when it means payroll received within the forecast
+- "Gap change" without explaining which gap
+- "Action cost" when it excludes important other expenditures
+- "Conditions confirmed" when only some requirements are satisfied
+- "Unfunded bills" when it is unclear whether they remain outstanding
+
+Prefer:
+
+- "Projected balance after scheduled obligations"
+- "Additional pay received by forecast end"
+- "Additional wages earned, payable later"
+- "Peak scheduled funding gap"
+- "Transportation and action costs"
+- "Past-due essential bills"
+- "Remaining outstanding balance"
+- "Cash available after payments"
+
+Never display raw cents in user-facing explanations.
+
+## Financial narrative
+
+Each plan should explain:
+
+1. What Maya needs to do.
+2. What it costs immediately.
+3. Which shifts it protects.
+4. When wages are earned.
+5. When those wages actually arrive.
+6. Whether overdue bills can be paid.
+7. When the car becomes repairable.
+8. How much liquid cash remains.
+9. What obligations remain outstanding.
+10. Which assumptions are unconfirmed.
+
+Example structure:
+
+"Taking Route 5 costs $2.50 per workday and allows Maya to keep working. That preserves wages received on later Fridays, rather than immediately increasing her account balance. The added income may make her $400 repair affordable on November 6. She may still miss rent or insurance payments before those wages arrive."
+
+Generate the actual dates and amounts dynamically.
+
+---
+
+# 10. Add a financial reconciliation check
+
+Every simulated plan should satisfy accounting invariants.
+
+## Cash conservation
+
+`EndingCash = StartingCash + RecordedCashInflows − RecordedCashOutflows`
+
+## Liability conservation
+
+`EndingOutstanding = InitialOutstanding + NewObligationsDue + Fees − Payments − Credits`
+
+Use appropriate separation between cash-funded bill payments and restricted assistance.
+
+## Wage reconciliation
+
+`DirectRecoveredShifts + IndirectRecoveredShifts = TotalRecoveredShifts`
+
+`DirectEarnedWages + IndirectEarnedWages = TotalRecoveredEarningPotential`
+
+`PayrollReceivedWithinHorizon + PayrollPayableAfterHorizon = TotalApplicableEarnedPayroll`
+
+Handle earnings outside the observation window carefully.
+
+## Expense reconciliation
+
+`TransitExpense = Sum(actual transit trips × applicable fare)`
+
+No duplicated transit costs.
+
+No transit costs when the shift was worked remotely or the repaired car was used instead.
+
+## Bill reconciliation
+
+`AmountDue = AmountPaid + AmountOutstanding`
+
+At every relevant date.
+
+No negative outstanding balances.
+
+No cash spent twice.
+
+### Assertions and diagnostics
+
+Add internal validation checks where practical.
+
+If a reconciliation fails, expose a developer diagnostic or reject the inconsistent plan instead of quietly presenting contradictory numbers.
+
+---
+
+# 11. Audit existing intervention effect types
+
+The simulator currently supports:
+
+- PreserveShiftEffect
+- ExpenseEffect
+- BillDueDateEffect
+- BillReductionEffect
+- AssistanceEffect
+- AlternativeRepairQuoteEffect
+- BorrowFundsEffect
+- MakeupHoursEffect
+
+Do not add unsupported effects without a reason.
+
+For each type:
+
+- Verify its accounting semantics.
+- Verify dated behavior.
+- Verify requirement handling.
+- Verify interaction with liabilities.
+- Verify duplicate prevention.
+- Verify its impact on repair and payroll where relevant.
+
+Do not automatically make unverified assistance or borrowing executable.
+
+Preserve the current research-agent architecture.
+
+If a candidate lacks amount, timing, eligibility, or approval, retain it as a resource/conditional lead rather than inventing a cash flow.
+
+---
+
+# 12. Update the Plan stage minimally
+
+This milestone is not a styling pass.
+
+Add only the UI necessary to expose correct accounting and avoid misleading information.
+
+Each plan should provide:
+
+- Strategy name.
+- Confirmed versus conditional outcome.
+- Shifts saved.
+- Additional take-home earned.
+- Pay received by forecast end.
+- Pay expected after forecast end.
+- Total action cost.
+- Repair date.
+- Peak scheduled funding gap.
+- Essential bills missed by original due date.
+- Essential bills still outstanding at forecast end.
+- Projected ending liquid cash.
+- Simplified net cash position after liabilities.
+
+Include clear before/after figures.
+
+Keep existing action timelines, resources, drafts, and questions.
+
+Do not remove the useful data already present.
+
+Do not turn every metric into a giant card. Reuse the current layout, group related numbers, and retain more detailed reconciliation information in the existing expandable areas.
+
+---
+
+# 13. Tests and acceptance
+
+## Base accounting
+
+- Starting cash is reconciled with actual cash inflows/outflows.
+- Negative theoretical balance doesn't imply a real overdraft.
+- Unpaid bills create outstanding liabilities.
+- Later payments reduce liabilities.
+- Bills aren't paid twice.
+- Outstanding balances never become negative.
+
+## Timing
+
+- Wage earnings and payroll deposits remain separate.
+- Following-Friday delay remains correct.
+- Bills due before payday cannot use later payroll.
+- Repair is charged once.
+- Repair cannot retroactively restore an earlier shift.
+
+## Expenses
+
+- Historical recurring expenses aren't double-counted with scheduled bills.
+- Essential variable expenses are included in their appropriate forecast variant.
+- Discretionary expenses remain estimates when projected.
+- Gas expense assumptions adjust when vehicle unavailable.
+- Transit fares only apply to actual trips.
+
+## Strategies
+
+- Transit-only works independently.
+- Remote-only works independently.
+- Hybrid works without overlapping wages or transit charges.
+- Bill extension retains the liability.
+- Subscription cancellation affects only relevant future charges.
+- Alternative quotes only change price when confirmed.
+- Assistance and borrowing affect the liability/cash ledger correctly when explicitly modeled.
+
+## Ranking
+
+- A $15 cancellation doesn't automatically outrank a high-impact, supported income-preservation strategy merely because of one slightly improved metric.
+- Confirmed and conditional plans remain visibly distinct.
+- Ranking is reproducible and justified.
+- Plan diversity is preserved.
+- No fabricated probabilities or benefits.
+
+## Display
+
+- Cash and outstanding liabilities aren't double-counted.
+- Financial metrics use dollars.
+- Earnings received versus earned are clear.
+- Remaining bills are specifically identified.
+- The expected benefit and limitations of each plan are understandable.
+
+## Regression
+
+All existing backend and frontend tests should continue passing.
+
+Run integration tests for the default Maya scenario and at least one alternate scenario to ensure the accounting isn't hardcoded to the demo.
+
+---
+
+# 14. Final validation against the live Maya scenario
+
+Use the existing default scenario and current snapshot.
+
+Compare:
+
+- Untreated
+- Cancel streaming
+- Route 5 only
+- Remote work only
+- Route 5 + remote work
+- Route 5 + subscription cancellation
+- Additional executable strategies if present
+
+Report actual results:
+
+| Metric | Untreated | Subscription | Transit | Remote | Hybrid |
+|---|---|---|---|---|---|
+| Recovered shifts | — | Actual | Actual | Actual | Actual |
+| Wages earned | Actual | Actual | Actual | Actual | Actual |
+| Pay received in horizon | Actual | Actual | Actual | Actual | Actual |
+| Pay due after horizon | Actual | Actual | Actual | Actual | Actual |
+| Action costs | Actual | Actual | Actual | Actual | Actual |
+| Bills missed on due date | Actual | Actual | Actual | Actual | Actual |
+| Ending outstanding essentials | Actual | Actual | Actual | Actual | Actual |
+| Peak funding gap | Actual | Actual | Actual | Actual | Actual |
+| Ending liquid cash | Actual | Actual | Actual | Actual | Actual |
+| Net cash after liabilities | Actual | Actual | Actual | Actual | Actual |
+| Repair date | Actual | Actual | Actual | Actual | Actual |
+
+Explain significant differences.
+
+In particular, verify why the current Route 5 plan reports:
+
+- 21 shifts recovered.
+- $1,920 additional pay received.
+- $25 transportation cost.
+- November 6 repair date.
+- $257.50 essential bills missed by due date.
+- $1,235 theoretical ending balance.
+
+Those values may change once outstanding liabilities and living expenses are properly modeled.
+
+**Do not preserve old outputs merely to avoid changing the demo. Accuracy takes precedence.**
+
+---
+
+# 15. Required final report
+
+After implementation, report:
+
+1. Root causes of the accounting issues.
+2. Outstanding-liability ledger design.
+3. How later cash settles overdue bills.
+4. Updated repair-affordability policy.
+5. Treatment of essential living expenses.
+6. Exact wage-earnings/payroll reconciliation.
+7. Updated peak-gap and ending-balance definitions.
+8. Ranking formula and rationale.
+9. New plan ordering.
+10. Before/after Maya financial results.
+11. Files changed.
+12. Tests passed and any limitations.
+
+Update relevant documentation, including `docs/DECISIONS.md` and Build 05 progress notes.
+
+---
+
+# Definition of done
+
+Build 05 is complete when:
+
+- Unpaid obligations remain outstanding until paid or validly discharged.
+- Cash, liabilities, earnings, and payroll reconcile.
+- Future living expenses are represented without duplicate scheduled bills.
+- Repair affordability uses defensible cash and obligation assumptions.
+- Ranking considers both immediate stability and long-term recovery.
+- A major wage-preservation strategy isn't buried behind a trivial savings action for an arbitrary ranking reason.
+- All displayed financial statistics are clearly defined and correct.
+- Existing recovery strategies, resources, drafts, questions, and research remain functional.
+
+**This is the final financial-logic integrity build. Preserve the existing product, implement the accounting corrections end to end, and leave major visual polish until afterward.**
